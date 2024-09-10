@@ -12,7 +12,7 @@ This project is a simple Go backend that provides JWT-based authentication. It i
 ## Directory Structure
 
 ```plaintext
-go-auth-backend/
+Backend/
 ├── main.go
 ├── handlers/
 │   ├── auth.go
