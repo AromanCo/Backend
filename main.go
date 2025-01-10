@@ -1,13 +1,11 @@
 package main
 
 import (
-	"fmt"
-
-	"github.com/gofiber/fiber/v2"
+	appConfig "github.com/AromanCo/Backend/configs"
+	api "github.com/AromanCo/Backend/internal/api"
 )
 
 func main() {
-	fmt.Print("dasdas")
-	app := fiber.New()
-	app.Listen(":8000")
+	api.StartServer()
+	appConfig.LoadAppSettings()
 }
