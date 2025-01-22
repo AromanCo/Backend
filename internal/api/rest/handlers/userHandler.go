@@ -5,6 +5,7 @@ import (
 
 	"github.com/AromanCo/Backend/internal/api/rest"
 	"github.com/AromanCo/Backend/internal/dto"
+	"github.com/AromanCo/Backend/internal/repository"
 	"github.com/AromanCo/Backend/internal/service"
 	"github.com/gofiber/fiber/v2"
 )
@@ -16,7 +17,10 @@ type UserHandler struct {
 
 func SetupUserRoutes(rh *rest.RestHandler) {
 	app := rh.App
-	svc := service.UserService{}
+
+	svc := service.UserService{
+		Repo: repository.NewUserRepository(rh.DB),
+	}
 	handler := UserHandler{
 		svc: svc,
 	}

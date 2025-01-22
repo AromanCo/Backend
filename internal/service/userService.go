@@ -1,13 +1,16 @@
 package service
 
 import (
+	"fmt"
 	"log"
 
 	"github.com/AromanCo/Backend/internal/domain"
 	"github.com/AromanCo/Backend/internal/dto"
+	"github.com/AromanCo/Backend/internal/repository"
 )
 
 type UserService struct {
+	Repo repository.UserRepository
 }
 
 func (s UserService) findUserByEmail(email string) (*domain.User, error) {
@@ -18,7 +21,15 @@ func (s UserService) findUserByEmail(email string) (*domain.User, error) {
 // any -> interface{}
 func (s UserService) Register(input dto.UserSignUp) (string, error) {
 	log.Println(input)
-	return "this-is-token-as-now", nil
+	user, err := s.Repo.CreateUser(domain.User{
+		Email:    input.Email,
+		Password: input.Password,
+		Phone:    input.Phone,
+	})
+
+	userInfo := fmt.Sprintf("%v, %v, %v", user.ID, user.Email, user.UserType)
+
+	return userInfo, err
 }
 
 func (s UserService) Login(input any) (string, error) {
