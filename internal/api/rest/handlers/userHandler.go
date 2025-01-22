@@ -4,17 +4,22 @@ import (
 	"net/http"
 
 	"github.com/AromanCo/Backend/internal/api/rest"
+	"github.com/AromanCo/Backend/internal/dto"
+	"github.com/AromanCo/Backend/internal/service"
 	"github.com/gofiber/fiber/v2"
 )
 
 type UserHandler struct {
 	// svc UserService
-
+	svc service.UserService
 }
 
 func SetupUserRoutes(rh *rest.RestHandler) {
 	app := rh.App
-	handler := UserHandler{}
+	svc := service.UserService{}
+	handler := UserHandler{
+		svc: svc,
+	}
 
 	// Publick endpoint
 	app.Post("/register", handler.Register)
@@ -36,8 +41,24 @@ func SetupUserRoutes(rh *rest.RestHandler) {
 }
 
 func (h *UserHandler) Register(ctx *fiber.Ctx) error {
+	user := dto.UserSignUp{}
+	err := ctx.BodyParser(&user)
+
+	if err != nil {
+		return ctx.Status(http.StatusBadRequest).JSON(&fiber.Map{
+			"message": "please provide valid input",
+		})
+	}
+	token, err := h.svc.Register(user)
+	if err != nil {
+		// TODO log the errors information to check
+		return ctx.Status(http.StatusInternalServerError).JSON(&fiber.Map{
+			"message": "error on signup",
+		})
+	}
 	return ctx.Status(http.StatusOK).JSON(&fiber.Map{
 		"message": "register",
+		"token":   token,
 	})
 }
 
