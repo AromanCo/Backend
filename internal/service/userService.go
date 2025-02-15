@@ -2,7 +2,6 @@ package service
 
 import (
 	"fmt"
-	"log"
 
 	"github.com/AromanCo/Backend/internal/domain"
 	"github.com/AromanCo/Backend/internal/dto"
@@ -20,7 +19,6 @@ func (s UserService) findUserByEmail(email string) (*domain.User, error) {
 
 // any -> interface{}
 func (s UserService) Register(input dto.UserSignUp) (string, error) {
-	log.Println(input)
 	user, err := s.Repo.CreateUser(domain.User{
 		Email:    input.Email,
 		Password: input.Password,

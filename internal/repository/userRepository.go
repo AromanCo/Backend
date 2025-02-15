@@ -6,6 +6,7 @@ import (
 
 	"github.com/AromanCo/Backend/internal/domain"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type UserRepository interface {
@@ -52,9 +53,29 @@ func (r userRepository) FindUser(email string) (domain.User, error) {
 }
 
 func (r userRepository) FindUserById(id uint) (domain.User, error) {
-	return domain.User{}, nil
+	var usr domain.User
+
+	err := r.db.Find(&usr, id).Error
+
+	if err != nil {
+		log.Printf("find user error %v", err)
+
+		return domain.User{}, errors.New("faild to find user")
+	}
+
+	return usr, nil
 }
 
 func (r userRepository) UpdateUser(id uint, u domain.User) (domain.User, error) {
-	return domain.User{}, nil
+	var usr domain.User
+
+	err := r.db.Model(&usr).Clauses(clause.Returning{}).Where("id=?", id).Updates(u).Error
+
+	if err != nil {
+		log.Printf("update  user error %v", err)
+
+		return domain.User{}, errors.New("faild to update user")
+	}
+
+	return usr, nil
 }
