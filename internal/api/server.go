@@ -7,6 +7,7 @@ import (
 	"github.com/AromanCo/Backend/internal/api/rest"
 	"github.com/AromanCo/Backend/internal/api/rest/handlers"
 	"github.com/AromanCo/Backend/internal/domain"
+	"github.com/AromanCo/Backend/internal/helper"
 	"github.com/gofiber/fiber/v2"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -24,9 +25,13 @@ func StartServer(config configs.AppConfig) {
 	log.Println("database connected")
 	db.AutoMigrate(&domain.User{})
 
+	auth := helper.SetupAuth(config.AppSecret)
+
 	rh := &rest.RestHandler{
-		App: app,
-		DB:  db,
+		App:    app,
+		DB:     db,
+		Auth:   auth,
+		Config: config,
 	}
 
 	setupRoutes(rh)
