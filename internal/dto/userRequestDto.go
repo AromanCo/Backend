@@ -9,3 +9,7 @@ type UserSignUp struct {
 	UseLogin
 	Phone string `json:"phone"`
 }
+
+type VerificationCodeInput struct {
+	Code int `json:"code"`
+}

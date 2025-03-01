@@ -124,7 +124,7 @@ func (a Auth) Authorize(ctx *fiber.Ctx) error {
 	} else {
 		return ctx.Status(401).JSON(&fiber.Map{
 			"message": "authorization faield",
-			"reason":  err,
+			"reason":  err.Error(),
 		})
 	}
 }
@@ -134,4 +134,8 @@ func (a Auth) GetCurrentUser(ctx *fiber.Ctx) domain.User {
 	user := ctx.Locals("user")
 
 	return user.(domain.User)
+}
+
+func (a Auth) GenerateCode() (int, error) {
+	return RandomNumbers(6)
 }

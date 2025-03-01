@@ -19,8 +19,9 @@ func SetupUserRoutes(rh *rest.RestHandler) {
 	app := rh.App
 
 	svc := service.UserService{
-		Repo: repository.NewUserRepository(rh.DB),
-		Auth: rh.Auth,
+		Repo:   repository.NewUserRepository(rh.DB),
+		Auth:   rh.Auth,
+		Config: rh.Config,
 	}
 	handler := UserHandler{
 		svc: svc,
@@ -96,14 +97,42 @@ func (h *UserHandler) Login(ctx *fiber.Ctx) error {
 }
 
 func (h *UserHandler) GetVerificationCode(ctx *fiber.Ctx) error {
+
+	user := h.svc.Auth.GetCurrentUser(ctx)
+
+	err := h.svc.GetVerificationCode(user)
+
+	if err != nil {
+		return ctx.Status(http.StatusInternalServerError).JSON(&fiber.Map{
+			"message": "Unable to Generate the Verification Code",
+		})
+	}
 	return ctx.Status(http.StatusOK).JSON(&fiber.Map{
 		"message": "get verfication code",
 	})
 }
 
 func (h *UserHandler) Verify(ctx *fiber.Ctx) error {
+	user := h.svc.Auth.GetCurrentUser(ctx)
+
+	var req dto.VerificationCodeInput
+
+	if err := ctx.BodyParser(&req); err != nil {
+		return ctx.Status(http.StatusBadRequest).JSON(&fiber.Map{
+			"message": "please provide valid input",
+		})
+	}
+
+	err := h.svc.VerifyCode(user.ID, req.Code)
+
+	if err != nil {
+		return ctx.Status(http.StatusBadRequest).JSON(&fiber.Map{
+			"message": err.Error(),
+		})
+	}
+
 	return ctx.Status(http.StatusOK).JSON(&fiber.Map{
-		"message": "verify",
+		"message": "verified successfuly",
 	})
 }
 
