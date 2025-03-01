@@ -1,17 +1,19 @@
 package helper
 
 import (
+	"errors"
+
 	"github.com/AromanCo/Backend/internal/domain"
 	"github.com/gofiber/fiber/v2"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Auth struct {
 	Secret string
 }
 
-
 func (a Auth) CreateHashedPassword(p string) (string, error) {
-	
+
 	if len(p) < 6 {
 		return "", errors.New("password lenght should be at least 6 character long")
 	}
@@ -27,32 +29,30 @@ func (a Auth) CreateHashedPassword(p string) (string, error) {
 }
 
 func (a Auth) GenerateToken(id uint, email string, role string) (string, error) {
-	
+
 	if id == 0 || email == "" || role == "" {
 		return "", errors.New("Requ ")
 	}
-
 
 	return "", nil
 }
 
 func (a Auth) VerifyPassword(pP string, hP string) error {
-	
+
 	return nil
 }
 
 func (a Auth) VerifyToken(t string) (domain.User, error) {
-	
+
 	return domain.User{}, nil
 }
 
 func (a Auth) Authorize(ctx *fiber.Ctx) error {
-	
+
 	return nil
 }
 
 func (a Auth) GetCurrentUser(ctx *fiber.Ctx) domain.User {
-	
-	return domain.user{}
-}
 
+	return domain.User{}
+}
