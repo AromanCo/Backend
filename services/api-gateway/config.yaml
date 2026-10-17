@@ -1,0 +1,28 @@
+server:
+  port: 8000
+  host: "0.0.0.0"
+  env: "development"
+
+logging:
+  level: "debug"
+  format: "json"
+
+cors:
+  allowed_origins:
+    - "http://localhost:3000"
+    - "http://localhost:3001"
+  allowed_methods:
+    - "GET"
+    - "POST"
+    - "PUT"
+    - "DELETE"
+    - "OPTIONS"
+  allowed_headers:
+    - "Content-Type"
+    - "Authorization"
+
+services:
+  product_service:
+    host: "localhost"
+    port: 9001
+    timeout: 5s
