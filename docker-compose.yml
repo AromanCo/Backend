@@ -1,158 +1,51 @@
-version: '3.8'
-
 services:
-  # PostgreSQL database
-  postgres:
-    image: postgres:15-alpine
-    container_name: aroman_postgres
+  db:
+    image: postgres:17-alpine
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
-    ports:
-      - "5432:5432"
+      POSTGRES_DB: aroman
+      POSTGRES_USER: aroman_migrator
+      POSTGRES_PASSWORD: ${MIGRATOR_DB_PASSWORD:?Set MIGRATOR_DB_PASSWORD}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/01-app-role.sh:/docker-entrypoint-initdb.d/01-app-role.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Redis cache
-  redis:
-    image: redis:7-alpine
-    container_name: aroman_redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Elasticsearch for search
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
-    container_name: aroman_elasticsearch
+      test: ["CMD-SHELL", "pg_isready -U aroman_migrator -d aroman"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [internal]
+  migrate:
+    build: .
+    profiles: [tools]
     environment:
-      - discovery.type=single-node
-      - xpack.security.enabled=false
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-    ports:
-      - "9200:9200"
-    volumes:
-      - elasticsearch_data:/usr/share/elasticsearch/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -s http://localhost:9200 | grep -q 'missing authentication credentials'"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Kafka message broker
-  kafka:
-    image: confluentinc/cp-kafka:7.5.0
-    container_name: aroman_kafka
+      DATABASE_URL: postgresql+psycopg://aroman_migrator:${MIGRATOR_DB_PASSWORD:?Set MIGRATOR_DB_PASSWORD}@db:5432/aroman
+      OTP_PEPPER: ${OTP_PEPPER:?Set OTP_PEPPER}
+      SESSION_PEPPER: ${SESSION_PEPPER:?Set SESSION_PEPPER}
+    command: ["sh", "-c", "alembic upgrade head && python -m aroman.administration.grant_app_role"]
     depends_on:
-      zookeeper:
+      db:
         condition: service_healthy
+    networks: [internal]
+  api:
+    build: .
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ENVIRONMENT: development
+      DATABASE_URL: postgresql+psycopg://aroman_app:${APP_DB_PASSWORD:?Set APP_DB_PASSWORD}@db:5432/aroman
+      OTP_PEPPER: ${OTP_PEPPER:?Set OTP_PEPPER}
+      SESSION_PEPPER: ${SESSION_PEPPER:?Set SESSION_PEPPER}
+      SMS_PROVIDER: ${SMS_PROVIDER:-unconfigured}
+      FAKE_SMS_ENABLED: ${FAKE_SMS_ENABLED:-false}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
     ports:
-      - "9092:9092"
-    volumes:
-      - kafka_data:/var/lib/kafka/data
-    healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions.sh --bootstrap-server localhost:9092 | grep -q ApiVersion"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Zookeeper for Kafka
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.5.0
-    container_name: aroman_zookeeper
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-    ports:
-      - "2181:2181"
-    volumes:
-      - zookeeper_data:/var/lib/zookeeper
-    healthcheck:
-      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep -q imok"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Prometheus metrics
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: aroman_prometheus
-    volumes:
-      - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-    ports:
-      - "9090:9090"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -s http://localhost:9090/-/healthy | grep -q ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Grafana visualization
-  grafana:
-    image: grafana/grafana:latest
-    container_name: aroman_grafana
-    environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_USERS_ALLOW_SIGN_UP: "false"
-    ports:
-      - "3000:3000"
-    volumes:
-      - grafana_data:/var/lib/grafana
+      - "127.0.0.1:8000:8000"
     depends_on:
-      - prometheus
-    healthcheck:
-      test: ["CMD-SHELL", "curl -s http://localhost:3000/api/health | grep -q ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  # Jaeger for distributed tracing
-  jaeger:
-    image: jaegertracing/all-in-one:latest
-    container_name: aroman_jaeger
-    ports:
-      - "6831:6831/udp"
-      - "16686:16686"  # Jaeger UI
-    environment:
-      COLLECTOR_ZIPKIN_HOST_PORT: ":9411"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -s http://localhost:16686 | grep -q html"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
+      db:
+        condition: service_healthy
+    networks: [internal]
+networks:
+  internal:
 volumes:
   postgres_data:
-  redis_data:
-  elasticsearch_data:
-  kafka_data:
-  zookeeper_data:
-  prometheus_data:
-  grafana_data:
-
-networks:
-  default:
-    name: aroman_network
