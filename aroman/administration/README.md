@@ -1,0 +1,1 @@
+Administrative write APIs are deliberately absent in M1-A. Public OTP verification always creates customer accounts. Role assignment, catalog publishing, and credential management require a separately designed authorization and audit workflow. Demonstration catalog records are loaded only by the explicit `aroman-seed` operator command.

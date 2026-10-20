@@ -38,3 +38,13 @@ node_modules/
 
 # MacOS specific files
 .DS_Store
+.venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.pyc
+*.db
+*.egg-info/
+# Reproducible OpenAPI export artifact
+docs/openapi.json
