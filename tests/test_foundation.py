@@ -10,7 +10,7 @@ from starlette.requests import Request
 
 from aroman.authentication.api import client_digest, digest
 from aroman.authentication.phone import normalize_mobile
-from aroman.authentication.sms import UnconfiguredSMS
+from aroman.authentication.sms import UnconfiguredSMS, get_sms_provider
 from aroman.core.config import Settings, get_settings
 from aroman.core.db import get_db, get_engine, utcnow
 from aroman.main import app
@@ -138,6 +138,58 @@ def test_unconfigured_sms_fails_safely(client, sms):
         assert sms.messages == []
     finally:
         app.dependency_overrides.clear()
+
+
+def test_failed_sms_delivery_rolls_back_challenge_and_allows_retry(sms):
+    mobile = "09128881234"
+
+    class FailingSMS:
+        attempted_code: str | None = None
+
+        def send_otp(self, recipient: str, code: str) -> None:
+            self.attempted_code = code
+            raise RuntimeError(
+                f"carrier private failure otp={code} credential=SMS_API_SECRET_SENTINEL"
+            )
+
+    failing_sms = FailingSMS()
+    had_previous_override = get_sms_provider in app.dependency_overrides
+    previous_override = app.dependency_overrides.get(get_sms_provider)
+
+    app.dependency_overrides[get_sms_provider] = lambda: failing_sms
+    try:
+        with TestClient(app, client=("192.0.2.45", 50002)) as isolated:
+            failed = isolated.post("/api/v1/auth/challenges", json={"mobile": mobile})
+            assert failed.status_code == 503
+            assert failed.json() == {"detail": "SMS delivery unavailable"}
+            assert failing_sms.attempted_code is not None
+            assert failing_sms.attempted_code not in failed.text
+            assert "carrier private failure" not in failed.text
+            assert "SMS_API_SECRET_SENTINEL" not in failed.text
+
+            mobile_key = digest(normalize_mobile(mobile), get_settings().otp_pepper)
+            with Session(get_engine()) as db:
+                assert db.scalar(
+                    select(AuthChallenge).where(AuthChallenge.mobile_digest == mobile_key)
+                ) is None
+    finally:
+        if had_previous_override:
+            app.dependency_overrides[get_sms_provider] = previous_override
+        else:
+            app.dependency_overrides.pop(get_sms_provider, None)
+
+    with TestClient(app, client=("192.0.2.45", 50002)) as recovered:
+        succeeded = recovered.post("/api/v1/auth/challenges", json={"mobile": mobile})
+        assert succeeded.status_code == 202
+        assert sms.messages[-1][0] == normalize_mobile(mobile)
+        assert sms.messages[-1][1] not in succeeded.text
+
+        mobile_key = digest(normalize_mobile(mobile), get_settings().otp_pepper)
+        with Session(get_engine()) as db:
+            challenge = db.scalar(
+                select(AuthChallenge).where(AuthChallenge.mobile_digest == mobile_key)
+            )
+            assert challenge is not None
 
 
 def test_otp_expiry_replay_and_attempt_limit(client, sms):
