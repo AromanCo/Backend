@@ -2,7 +2,7 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -25,12 +25,23 @@ class ConceptInput(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     notes: list[NoteSelection] = Field(default_factory=list)
 
+    @field_validator("name")
+    @classmethod
+    def non_blank_name(cls, name: str) -> str:
+        if not name.strip():
+            raise ValueError("Concept name must contain non-whitespace characters")
+        return name
+
     @model_validator(mode="after")
     def unique_selections(self):
         if len({note.note_id for note in self.notes}) != len(self.notes):
             raise ValueError("Each note may be selected once")
         if len({(note.layer, note.position) for note in self.notes}) != len(self.notes):
             raise ValueError("Duplicate layer position")
+        for layer in ("top", "heart", "base"):
+            positions = sorted(note.position for note in self.notes if note.layer == layer)
+            if positions != list(range(len(positions))):
+                raise ValueError("Positions must start at zero and be contiguous within each layer")
         return self
 
 
