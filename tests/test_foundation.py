@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
@@ -39,16 +40,17 @@ def test_phone_normalization():
 
 
 def test_real_environment_rejects_fake_sms():
-    with pytest.raises(ValueError):
-        Settings(
-            environment="production",
-            database_url="postgresql+psycopg://user:password@db/aroman",
-            otp_pepper="a" * 32,
-            session_pepper="b" * 32,
-            sms_provider="fake",
-            cors_origins="https://example.com",
-            cookie_secure=True,
-        )
+    for environment in ("staging", "production"):
+        with pytest.raises(ValueError):
+            Settings(
+                environment=environment,
+                database_url="postgresql+psycopg://user:password@db/aroman",
+                otp_pepper="a" * 32,
+                session_pepper="b" * 32,
+                sms_provider="fake",
+                cors_origins="https://example.com",
+                cookie_secure=True,
+            )
     with pytest.raises(RuntimeError):
         UnconfiguredSMS().send_otp("+989121234567", "123456")
     with pytest.raises(ValueError, match="explicit opt-in"):
@@ -85,6 +87,60 @@ def test_health_and_validation(client):
     assert client.get("/health/ready").status_code == 200
     assert client.post("/api/v1/auth/challenges", json={"mobile": "bad"}).status_code == 422
     assert client.get("/openapi.json").status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "field", "marker"),
+    [
+        (
+            "/api/v1/auth/challenges",
+            {"mobile": "SYNTHETIC_MOBILE_MARKER_" * 2},
+            "mobile",
+            "SYNTHETIC_MOBILE_MARKER_",
+        ),
+        (
+            "/api/v1/auth/verify",
+            {"mobile": "SYNTHETIC_MOBILE_MARKER_" * 2, "code": "123456"},
+            "mobile",
+            "SYNTHETIC_MOBILE_MARKER_",
+        ),
+        (
+            "/api/v1/auth/verify",
+            {"mobile": "09120000000", "code": "SYNTHETIC_CODE_MARKER"},
+            "code",
+            "SYNTHETIC_CODE_MARKER",
+        ),
+    ],
+)
+def test_auth_validation_does_not_echo_submitted_values(client, path, body, field, marker):
+    response = client.post(path, json=body)
+    assert response.status_code == 422
+    assert marker not in response.text
+    assert response.json()["detail"] == [
+        {
+            "type": "string_too_long" if field == "mobile" else "string_pattern_mismatch",
+            "loc": ["body", field],
+            "msg": (
+                "String should have at most 32 characters"
+                if field == "mobile"
+                else "String should match pattern '^[0-9۰-۹٠-٩]{6}$'"
+            ),
+        }
+    ]
+
+
+def test_auth_validation_keeps_valid_flow_and_other_validation_unchanged(client, sms):
+    mobile = "09128881236"
+    requested = client.post("/api/v1/auth/challenges", json={"mobile": mobile})
+    assert requested.status_code == 202
+    verified = client.post(
+        "/api/v1/auth/verify", json={"mobile": mobile, "code": sms.messages[-1][1]}
+    )
+    assert verified.status_code == 200
+
+    unrelated = client.get("/api/v1/fragrance-notes", params={"limit": "UNRELATED_MARKER"})
+    assert unrelated.status_code == 422
+    assert unrelated.json()["detail"][0]["input"] == "UNRELATED_MARKER"
 
 
 def test_cors_preflight_is_origin_restricted(client):
@@ -164,6 +220,7 @@ def test_failed_sms_delivery_rolls_back_challenge_and_allows_retry(sms):
             assert failed.json() == {"detail": "SMS delivery unavailable"}
             assert failing_sms.attempted_code is not None
             assert failing_sms.attempted_code not in failed.text
+            assert mobile not in failed.text
             assert "carrier private failure" not in failed.text
             assert "SMS_API_SECRET_SENTINEL" not in failed.text
 
@@ -190,6 +247,43 @@ def test_failed_sms_delivery_rolls_back_challenge_and_allows_retry(sms):
                 select(AuthChallenge).where(AuthChallenge.mobile_digest == mobile_key)
             )
             assert challenge is not None
+
+
+def test_delivery_before_failed_commit_leaves_code_unusable(sms):
+    mobile = "09128881235"
+
+    class FailingCommitSession(Session):
+        def commit(self) -> None:
+            raise SQLAlchemyError("simulated commit failure")
+
+    def failing_db():
+        with FailingCommitSession(get_engine()) as db:
+            yield db
+
+    app.dependency_overrides[get_db] = failing_db
+    try:
+        with TestClient(app, client=("192.0.2.46", 50003)) as isolated:
+            result = isolated.post("/api/v1/auth/challenges", json={"mobile": mobile})
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+
+    assert result.status_code == 503
+    assert result.json() == {"detail": "Database unavailable"}
+    assert len(sms.messages) == 1
+    assert sms.messages[0][1] not in result.text
+    assert mobile not in result.text
+    with Session(get_engine()) as db:
+        assert db.scalar(
+            select(AuthChallenge).where(
+                AuthChallenge.mobile_digest
+                == digest(normalize_mobile(mobile), get_settings().otp_pepper)
+            )
+        ) is None
+    with TestClient(app, client=("192.0.2.46", 50003)) as isolated:
+        rejected = isolated.post(
+            "/api/v1/auth/verify", json={"mobile": mobile, "code": sms.messages[0][1]}
+        )
+    assert rejected.status_code == 400
 
 
 def test_otp_expiry_replay_and_attempt_limit(client, sms):

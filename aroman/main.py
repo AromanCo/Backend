@@ -3,6 +3,8 @@ import logging
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import inspect, text
@@ -51,6 +53,22 @@ async def coded_forbidden_handler(request: Request, error: CodedForbidden):
 async def database_error_handler(request: Request, error: SQLAlchemyError):
     logger.error("Database operation failed: %s", type(error).__name__)
     return JSONResponse(status_code=503, content={"detail": "Database unavailable"})
+
+
+@app.exception_handler(RequestValidationError)
+async def auth_validation_error_handler(request: Request, error: RequestValidationError):
+    if request.method != "POST" or request.url.path not in (
+        "/api/v1/auth/challenges",
+        "/api/v1/auth/verify",
+    ):
+        return await request_validation_exception_handler(request, error)
+    # FastAPI's default response includes the submitted input and nested context.
+    # These auth fields can contain a mobile number or verification code.
+    detail = [
+        {key: item[key] for key in ("type", "loc", "msg")}
+        for item in error.errors()
+    ]
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 @app.middleware("http")
