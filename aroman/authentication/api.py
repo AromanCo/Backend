@@ -13,6 +13,7 @@ from aroman.authentication.phone import normalize_mobile
 from aroman.authentication.sms import SMSProvider, get_sms_provider
 from aroman.core.config import Settings, get_settings
 from aroman.core.db import get_db, utcnow
+from aroman.core.errors import CodedForbidden
 from aroman.models import AuthChallenge, AuthSession, AuthVerifyAttempt, User
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -83,7 +84,7 @@ def recent_count(db: Session, column, value: str, minutes: int) -> int:
 def check_origin(request: Request, settings: Settings) -> None:
     origin = request.headers.get("origin")
     if origin and origin not in settings.origins:
-        raise HTTPException(403, "Origin denied")
+        raise CodedForbidden("Origin denied", "origin_denied")
 
 
 def aware(value):
@@ -225,7 +226,7 @@ def verify_code(
         db.flush()
     if not user.is_active:
         db.commit()
-        raise HTTPException(403, "Account unavailable")
+        raise CodedForbidden("Account unavailable", "account_unavailable")
     token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
     session = AuthSession(
         user_id=user.id,
@@ -273,7 +274,7 @@ def current_session(
         if not csrf or not hmac.compare_digest(
             session.csrf_digest, digest(csrf, settings.session_pepper)
         ):
-            raise HTTPException(403, "CSRF token required")
+            raise CodedForbidden("CSRF token required", "csrf_invalid")
     return session
 
 
