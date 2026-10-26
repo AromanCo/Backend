@@ -15,8 +15,8 @@ The export command reads the container's configuration and does not connect to P
 
 | Method and path | Request | Success | Common failures |
 |---|---|---|---|
-| `POST /api/v1/auth/challenges` | `{"mobile":"<Iranian mobile>"}` | `202 {"message":"If delivery is available, a code has been sent"}` | 422 invalid mobile, 429 limit, 503 SMS unavailable |
-| `POST /api/v1/auth/verify` | `{"mobile":"<same mobile>","code":"<six received digits>"}` | `200 {"user_id":"<uuid>","csrf_token":"<opaque token>"}` and session cookie | 400 invalid or expired, 429 limit |
+| `POST /api/v1/auth/challenges` | `{"mobile":"<Iranian mobile>"}` | `202 {"message":"If delivery is available, a code has been sent"}` | 403 disallowed Origin, 422 invalid mobile, 429 limit, 503 SMS unavailable |
+| `POST /api/v1/auth/verify` | `{"mobile":"<same mobile>","code":"<six received digits>"}` | `200 {"user_id":"<uuid>","csrf_token":"<opaque token>"}` and session cookie | 400 invalid or expired, 403 disallowed Origin or unavailable account, 429 limit |
 | `GET /api/v1/auth/session` | Session cookie | `200 {"user_id":"<uuid>","role":"customer"}` | 401 |
 | `GET /api/v1/auth/csrf` | Session cookie | `200 {"csrf_token":"<new opaque token>"}` | 401, 403 disallowed Origin |
 | `DELETE /api/v1/auth/session` | Session cookie and `X-CSRF-Token` | 204 | 401, 403 |
@@ -27,6 +27,20 @@ Mobile input accepts Iranian `09…`, `+989…`, `989…`, and `00989…` forms 
 The `aroman_session` cookie is HttpOnly, host scoped, path `/api/v1`, SameSite `Lax` by default, and Secure by default. Plain HTTP localhost development may set `COOKIE_SECURE=false`. For a cross-site HTTPS frontend, configure `COOKIE_SAMESITE=none`, keep `COOKIE_SECURE=true`, and list the exact frontend origin in `CORS_ORIGINS`. Session lifetime defaults to seven days without sliding renewal. Authentication, user, and private concept responses send `Cache-Control: no-store`. `DELETE /auth/session` revokes the server record and clears the cookie.
 
 Send `X-CSRF-Token` on every authenticated `POST`, `PUT`, and `DELETE`. Store the token in application memory. After a reload, call `GET /auth/csrf`; it rotates the token and invalidates the previous value. Browser requests must use credentials and a configured Origin.
+
+Relevant HTTP 403 responses retain a string `detail` and add a stable top-level `code`:
+
+```json
+{"detail":"CSRF token required","code":"csrf_invalid"}
+```
+
+| Code | When returned | Existing detail |
+|---|---|---|
+| `csrf_invalid` | Missing, expired after rotation, or mismatched `X-CSRF-Token` on an authenticated write | `CSRF token required` |
+| `origin_denied` | Request Origin is not permitted on an Origin-checked authentication request or authenticated write | `Origin denied` |
+| `account_unavailable` | Existing account is inactive during OTP verification | `Account unavailable` |
+
+An expired or invalid session returns 401 instead of `csrf_invalid`. Other error response shapes are unchanged.
 
 ## Public catalog
 
@@ -71,11 +85,11 @@ Responses contain `id`, `name`, and `notes` with `note_id`, `layer`, `position`.
 
 ## Errors and health
 
-Common errors use `{"detail":"message"}`. Pydantic validation returns HTTP 422 with `{"detail":[{"type":"...","loc":["body","field"],"msg":"...","input":"..."}]}`; field locations and messages depend on the invalid input. Domain validation may return 422 with a string `detail`. Do not parse error English as a stable machine code. Handle HTTP status and show a safe generic message when needed.
+Common errors use `{"detail":"message"}`; the coded 403 errors documented above also include `code`. Pydantic validation returns HTTP 422 with `{"detail":[{"type":"...","loc":["body","field"],"msg":"...","input":"..."}]}`; field locations and messages depend on the invalid input. Domain validation may return 422 with a string `detail`. Use `code` for these 403 cases; do not parse error English as a stable machine code. Handle HTTP status and show a safe generic message when needed.
 
 - 400: invalid or expired OTP.
 - 401: no valid session.
-- 403: invalid CSRF token or disallowed Origin.
+- 403: invalid CSRF token, disallowed Origin, or unavailable account during OTP verification.
 - 404: concept absent or owned by another user.
 - 422: invalid input, unknown note, or note limit.
 - 429: OTP rate or attempt limit.

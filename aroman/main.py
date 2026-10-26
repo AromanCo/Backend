@@ -14,6 +14,7 @@ from aroman.brands.api import router as brands_router
 from aroman.catalog.api import router as catalog_router
 from aroman.core.config import get_settings
 from aroman.core.db import get_db
+from aroman.core.errors import CodedForbidden
 from aroman.fragrance_concepts.api import router as concepts_router
 from aroman.fragrance_notes.api import router as notes_router
 from aroman.users.api import router as users_router
@@ -36,6 +37,14 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Content-Type", "X-CSRF-Token"],
 )
+
+
+@app.exception_handler(CodedForbidden)
+async def coded_forbidden_handler(request: Request, error: CodedForbidden):
+    return JSONResponse(
+        status_code=error.status_code,
+        content={"detail": error.detail, "code": error.code},
+    )
 
 
 @app.exception_handler(SQLAlchemyError)
