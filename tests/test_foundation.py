@@ -90,43 +90,82 @@ def test_health_and_validation(client):
 
 
 @pytest.mark.parametrize(
-    ("path", "body", "field", "marker"),
+    ("path", "body", "field", "error_type", "marker"),
     [
         (
             "/api/v1/auth/challenges",
             {"mobile": "SYNTHETIC_MOBILE_MARKER_" * 2},
             "mobile",
+            "string_too_long",
             "SYNTHETIC_MOBILE_MARKER_",
         ),
         (
             "/api/v1/auth/verify",
             {"mobile": "SYNTHETIC_MOBILE_MARKER_" * 2, "code": "123456"},
             "mobile",
+            "string_too_long",
             "SYNTHETIC_MOBILE_MARKER_",
         ),
         (
             "/api/v1/auth/verify",
             {"mobile": "09120000000", "code": "SYNTHETIC_CODE_MARKER"},
             "code",
+            "string_pattern_mismatch",
             "SYNTHETIC_CODE_MARKER",
         ),
     ],
 )
-def test_auth_validation_does_not_echo_submitted_values(client, path, body, field, marker):
+def test_auth_validation_does_not_echo_submitted_values(
+    client, path, body, field, error_type, marker
+):
     response = client.post(path, json=body)
     assert response.status_code == 422
+    assert response.headers["Cache-Control"] == "no-store"
     assert marker not in response.text
-    assert response.json()["detail"] == [
-        {
-            "type": "string_too_long" if field == "mobile" else "string_pattern_mismatch",
-            "loc": ["body", field],
-            "msg": (
-                "String should have at most 32 characters"
-                if field == "mobile"
-                else "String should match pattern '^[0-9۰-۹٠-٩]{6}$'"
-            ),
-        }
-    ]
+    errors = response.json()["detail"]
+    assert len(errors) == 1
+    assert errors[0]["loc"] == ["body", field]
+    assert errors[0]["type"] == error_type
+    assert errors[0]["msg"]
+    assert set(errors[0]) == {"loc", "type", "msg"}
+
+
+@pytest.mark.parametrize("path", ["/api/v1/auth/challenges", "/api/v1/auth/verify"])
+def test_auth_malformed_json_does_not_echo_submitted_values(client, path):
+    marker = "SYNTHETIC_JSON_MARKER"
+    response = client.post(
+        path,
+        content=f'{{"mobile":"{marker}",',
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 422
+    assert response.headers["Cache-Control"] == "no-store"
+    assert marker not in response.text
+    errors = response.json()["detail"]
+    assert len(errors) == 1
+    assert errors[0]["loc"][0] == "body"
+    assert errors[0]["type"] == "json_invalid"
+    assert errors[0]["msg"]
+    assert set(errors[0]) == {"loc", "type", "msg"}
+
+
+def test_auth_multiple_invalid_fields_are_redacted(client):
+    mobile_marker = "SYNTHETIC_MOBILE_MARKER_"
+    code_marker = "SYNTHETIC_CODE_MARKER"
+    response = client.post(
+        "/api/v1/auth/verify",
+        json={"mobile": mobile_marker * 2, "code": code_marker},
+    )
+    assert response.status_code == 422
+    assert response.headers["Cache-Control"] == "no-store"
+    assert mobile_marker not in response.text
+    assert code_marker not in response.text
+    errors = response.json()["detail"]
+    assert {(tuple(error["loc"]), error["type"]) for error in errors} == {
+        (("body", "mobile"), "string_too_long"),
+        (("body", "code"), "string_pattern_mismatch"),
+    }
+    assert all(error["msg"] and set(error) == {"loc", "type", "msg"} for error in errors)
 
 
 def test_auth_validation_keeps_valid_flow_and_other_validation_unchanged(client, sms):
