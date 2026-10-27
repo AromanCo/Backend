@@ -16,8 +16,8 @@ from sqlalchemy.engine import URL
 from sqlalchemy.exc import ProgrammingError
 
 
-def run(*args, input=None):
-    return subprocess.run(args, input=input, text=True, capture_output=True, check=True)
+def run(*args, env=None, input=None):
+    return subprocess.run(args, env=env, input=input, text=True, capture_output=True, check=True)
 
 
 def migration(url, *args):
@@ -28,6 +28,13 @@ def migration(url, *args):
     return subprocess.run(
         [sys.executable, "-m", *args], env=env, text=True, capture_output=True, check=False
     )
+
+
+def assert_success(result, passwords):
+    output = result.stdout + result.stderr
+    for password in passwords.values():
+        output = output.replace(password, "[REDACTED]")
+    assert result.returncode == 0, output
 
 
 @pytest.fixture(scope="module")
@@ -43,6 +50,12 @@ def roles():
     container_id = None
     engines = []
     init_script = Path(__file__).resolve().parents[1] / "infrastructure/postgres/01-app-role.sh"
+    docker_env = os.environ.copy()
+    docker_env.update(
+        POSTGRES_PASSWORD=passwords["postgres"],
+        MIGRATOR_DB_PASSWORD=passwords["migrator"],
+        APP_DB_PASSWORD=passwords["app"],
+    )
     try:
         container_id = run(
             "docker",
@@ -60,14 +73,15 @@ def roles():
             "-p",
             "127.0.0.1::5432",
             "-e",
-            f"POSTGRES_PASSWORD={passwords['postgres']}",
+            "POSTGRES_PASSWORD",
             "-e",
             "POSTGRES_DB=aroman",
             "-e",
-            f"MIGRATOR_DB_PASSWORD={passwords['migrator']}",
+            "MIGRATOR_DB_PASSWORD",
             "-e",
-            f"APP_DB_PASSWORD={passwords['app']}",
-            "postgres:17",
+            "APP_DB_PASSWORD",
+            "postgres:17-alpine",
+            env=docker_env,
         ).stdout.strip()
         assert len(container_id) == 64
         details = run("docker", "inspect", container_id).stdout
@@ -117,13 +131,120 @@ def roles():
                 conn.scalar(text("SELECT rolsuper FROM pg_roles WHERE rolname='aroman_migrator'"))
                 is False
             )
-            conn.execute(
+            assert conn.scalar(
                 text(
-                    "CREATE ROLE aroman_operator LOGIN CREATEDB CREATEROLE "
-                    f"PASSWORD '{passwords['operator']}'"
+                    "SELECT NOT EXISTS (SELECT 1 FROM aclexplode(datacl) "
+                    "WHERE grantee = 0 AND privilege_type = 'CONNECT') "
+                    "FROM pg_database WHERE datname = 'aroman'"
                 )
             )
-            conn.execute(text("GRANT aroman_migrator TO aroman_operator"))
+            assert conn.scalar(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM aclexplode(datacl) "
+                    "WHERE grantee = 'aroman_app'::regrole AND privilege_type = 'CONNECT') "
+                    "FROM pg_database WHERE datname = 'aroman'"
+                )
+            )
+            for role in ("aroman_migrator", "aroman_app"):
+                flags = conn.execute(
+                    text(
+                        "SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls "
+                        "FROM pg_roles WHERE rolname = :role"
+                    ),
+                    {"role": role},
+                ).one()
+                assert not any(flags), f"{role} has elevated role attributes"
+        operator_sql = (
+            "CREATE ROLE aroman_operator LOGIN CREATEDB CREATEROLE "
+            f"PASSWORD '{passwords['operator']}';\n"
+            "GRANT aroman_migrator TO aroman_operator;\n"
+        )
+        run(
+            "docker",
+            "exec",
+            "-i",
+            container_id,
+            "psql",
+            "-U",
+            "postgres",
+            "-d",
+            "postgres",
+            "-v",
+            "ON_ERROR_STOP=1",
+            input=operator_sql,
+        )
+
+        aroman_migrator_url, aroman_app_url = url("migrator", "aroman"), url("app", "aroman")
+        aroman_migrator = create_engine(aroman_migrator_url)
+        aroman_app = create_engine(aroman_app_url)
+        engines.extend((aroman_migrator, aroman_app))
+        with aroman_migrator.connect() as conn:
+            assert conn.scalar(text("SELECT current_database()")) == "aroman"
+            assert conn.scalar(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM aclexplode(nspacl) "
+                    "WHERE grantee = 'aroman_app'::regrole AND privilege_type = 'USAGE') "
+                    "FROM pg_namespace WHERE nspname = 'public'"
+                )
+            )
+            assert conn.scalar(
+                text(
+                    "SELECT EXISTS (SELECT 1 FROM pg_default_acl d, aclexplode(d.defaclacl) a "
+                    "WHERE d.defaclrole = 'aroman_migrator'::regrole "
+                    "AND d.defaclnamespace = 'public'::regnamespace "
+                    "AND d.defaclobjtype = 'r' AND a.grantee = 'aroman_app'::regrole "
+                    "AND a.privilege_type = 'SELECT')"
+                )
+            )
+        with aroman_app.connect() as conn:
+            assert conn.scalar(text("SELECT current_database()")) == "aroman"
+            assert conn.scalar(text("SELECT current_user")) == "aroman_app"
+            assert conn.scalar(text("SELECT has_schema_privilege(current_user, 'public', 'USAGE')"))
+            assert not conn.scalar(
+                text("SELECT has_schema_privilege(current_user, 'public', 'CREATE')")
+            )
+        denied_migration = migration(aroman_app_url, "alembic", "upgrade", "head")
+        assert denied_migration.returncode != 0, "Application role unexpectedly applied migrations"
+        assert "permission denied" in denied_migration.stderr.lower()
+        assert_success(
+            migration(aroman_migrator_url, "aroman.administration.check_migrator_role"), passwords
+        )
+        forbidden_name = f"aroman_forbidden_{token}"
+        migrator_ddl = create_engine(aroman_migrator_url, isolation_level="AUTOCOMMIT")
+        engines.append(migrator_ddl)
+        try:
+            with migrator_ddl.connect() as conn:
+                with pytest.raises(ProgrammingError, match="permission denied"):
+                    conn.execute(text(f'CREATE ROLE "{forbidden_name}"'))
+                with pytest.raises(ProgrammingError, match="permission denied"):
+                    conn.execute(text(f'CREATE DATABASE "{forbidden_name}"'))
+        finally:
+            with bootstrap.connect() as conn:
+                assert conn.scalar(text("SELECT current_database()")) == "postgres"
+                assert forbidden_name == f"aroman_forbidden_{token}"
+                conn.execute(text(f'DROP DATABASE IF EXISTS "{forbidden_name}"'))
+                conn.execute(text(f'DROP ROLE IF EXISTS "{forbidden_name}"'))
+        with bootstrap.begin() as conn:
+            conn.execute(text("ALTER ROLE aroman_migrator SUPERUSER"))
+        try:
+            unsafe = migration(aroman_migrator_url, "aroman.administration.check_migrator_role")
+            assert unsafe.returncode != 0, "Preflight accepted a superuser migrator"
+            assert "Unsafe migrator role" in unsafe.stderr
+            with aroman_migrator.connect() as conn:
+                assert conn.scalar(text("SELECT to_regclass('public.alembic_version')")) is None
+        finally:
+            with bootstrap.begin() as conn:
+                conn.execute(text("ALTER ROLE aroman_migrator NOSUPERUSER"))
+        assert_success(
+            migration(aroman_migrator_url, "aroman.administration.check_migrator_role"), passwords
+        )
+        assert_success(migration(aroman_migrator_url, "alembic", "upgrade", "head"), passwords)
+        with aroman_migrator.connect() as conn:
+            assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "a4b01"
+        for _ in range(2):
+            assert_success(
+                migration(aroman_migrator_url, "aroman.administration.grant_app_role"), passwords
+            )
         operator = create_engine(url("operator"), isolation_level="AUTOCOMMIT")
         engines.append(operator)
         with operator.begin() as conn:
@@ -170,7 +291,7 @@ def roles():
         assert denied_migration.returncode != 0, "Application role unexpectedly applied migrations"
         assert "permission denied" in denied_migration.stderr.lower()
         applied = migration(migrator_url, "alembic", "upgrade", "head")
-        assert applied.returncode == 0, applied.stdout + applied.stderr
+        assert_success(applied, passwords)
         with migrator.connect() as conn:
             assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "a4b01"
             assert (
@@ -184,8 +305,8 @@ def roles():
             )
         for _ in range(2):
             granted = migration(migrator_url, "aroman.administration.grant_app_role")
-            assert granted.returncode == 0, granted.stdout + granted.stderr
-        yield migrator, app
+            assert_success(granted, passwords)
+        yield migrator, app, aroman_migrator, aroman_app
     finally:
         for engine in reversed(engines):
             engine.dispose()
@@ -211,7 +332,7 @@ def denied(engine, sql, params=None):
 
 
 def test_role_isolation_and_application_operations(roles):
-    migrator, app = roles
+    _, _, migrator, app = roles
     now = datetime.now(UTC)
     user, challenge, session, concept, note = (uuid.uuid4() for _ in range(5))
     family, brand, product, variant = (uuid.uuid4() for _ in range(4))
@@ -359,3 +480,14 @@ def test_role_isolation_and_application_operations(roles):
             is False
         )
         assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "a4b01"
+
+
+def test_additional_database_isolation(roles):
+    migrator, app, _, _ = roles
+    with migrator.connect() as conn:
+        assert conn.scalar(text("SELECT current_database()")) != "aroman"
+        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "a4b01"
+    with app.connect() as conn:
+        assert conn.scalar(text("SELECT current_user")) == "aroman_app"
+        assert conn.scalar(text("SELECT version_num FROM alembic_version")) == "a4b01"
+    denied(app, "CREATE TABLE role_gate_forbidden (id int)")

@@ -23,7 +23,7 @@ services:
       DATABASE_URL: postgresql+psycopg://aroman_migrator:${MIGRATOR_DB_PASSWORD:?Set MIGRATOR_DB_PASSWORD}@db:5432/aroman
       OTP_PEPPER: ${OTP_PEPPER:?Set OTP_PEPPER}
       SESSION_PEPPER: ${SESSION_PEPPER:?Set SESSION_PEPPER}
-    command: ["sh", "-c", "alembic upgrade head && python -m aroman.administration.grant_app_role"]
+    command: ["sh", "-c", "python -m aroman.administration.check_migrator_role && alembic upgrade head && python -m aroman.administration.grant_app_role"]
     depends_on:
       db:
         condition: service_healthy
