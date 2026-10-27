@@ -31,6 +31,7 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       OTP_POSTGRES_REQUIRED: '1'
+      OTP_POSTGRES_DISPOSABLE: '1'
       OTP_TEST_POSTGRES_URL: postgresql+psycopg://aroman_test:disposable_test_password@localhost:5432/aroman_otp_test
     steps:
       - uses: actions/checkout@v4
