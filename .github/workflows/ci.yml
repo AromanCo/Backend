@@ -40,3 +40,15 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -e '.[dev]'
       - run: pytest -q tests/test_otp_postgres.py
+  postgres-role-isolation:
+    if: github.event_name == 'pull_request' && github.base_ref == 'develop'
+    runs-on: ubuntu-latest
+    env:
+      ROLE_POSTGRES_REQUIRED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e '.[dev]'
+      - run: pytest -q tests/test_postgres_roles.py
