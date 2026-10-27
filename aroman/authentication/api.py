@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from aroman.authentication.phone import normalize_mobile
-from aroman.authentication.sms import SMSProvider, get_sms_provider
+from aroman.authentication.sms import SMSDeliveryRejected, SMSProvider, get_sms_provider
 from aroman.core.config import Settings, get_settings
 from aroman.core.db import get_db, utcnow
 from aroman.core.errors import CodedForbidden
@@ -115,6 +115,24 @@ def request_code(
         .where(AuthChallenge.mobile_digest == mobile_key)
         .order_by(AuthChallenge.created_at.desc(), AuthChallenge.id.desc())
     )
+    previous = db.scalar(
+        select(AuthChallenge)
+        .where(
+            AuthChallenge.mobile_digest == mobile_key,
+            AuthChallenge.delivery_status == "accepted",
+            AuthChallenge.consumed_at.is_(None),
+            AuthChallenge.expires_at > utcnow(),
+            AuthChallenge.attempts < 5,
+        )
+        .order_by(AuthChallenge.created_at.desc(), AuthChallenge.id.desc())
+    )
+    # A pending submission may have reached a handset. Keep its reservation for
+    # its entire configured lifetime, even after a process crash or timeout.
+    if latest and latest.delivery_status == "pending":
+        if aware(latest.expires_at) > utcnow():
+            raise HTTPException(429, "Try again later")
+        if latest.consumed_at is None:
+            latest.delivery_status = "rejected"  # Expired; clear the unique pending slot.
     if latest and (utcnow() - aware(latest.created_at)).total_seconds() < 60:
         raise HTTPException(429, "Try again later")
     if (
@@ -128,24 +146,39 @@ def request_code(
         code_digest=digest(code, settings.otp_pepper),
         requester_digest=peer_key,
         expires_at=utcnow() + timedelta(minutes=settings.otp_minutes),
-        attempts=0,
+        attempts=previous.attempts if previous else 0,
+        delivery_status="pending",
     )
     db.add(challenge)
-    db.flush()
+    # Dispatch is forbidden until the reservation commit has succeeded.
+    db.commit()
     try:
         sms.send_otp(mobile, code)
+    except SMSDeliveryRejected:
+        delivery_status = "rejected"
     except Exception:
-        db.rollback()
+        # Outcome is uncertain. The committed pending code remains verifiable.
         raise HTTPException(503, "SMS delivery unavailable") from None
-    for old in db.scalars(
-        select(AuthChallenge).where(
-            AuthChallenge.mobile_digest == mobile_key,
-            AuthChallenge.id != challenge.id,
-            AuthChallenge.consumed_at.is_(None),
-        )
-    ):
-        old.consumed_at = utcnow()
+    else:
+        delivery_status = "accepted"
+    # Reacquire the mobile lock: verification may have consumed both rows while
+    # the external send was in flight. Never make such a row active again.
+    lock_rate_keys(db, mobile_key, peer_key)
+    reserved = db.get(AuthChallenge, challenge.id, populate_existing=True)
+    if reserved and reserved.delivery_status == "pending" and reserved.consumed_at is None:
+        reserved.delivery_status = delivery_status
+        if delivery_status == "accepted":
+            for old in db.scalars(
+                select(AuthChallenge).where(
+                    AuthChallenge.mobile_digest == mobile_key,
+                    AuthChallenge.id != reserved.id,
+                    AuthChallenge.consumed_at.is_(None),
+                )
+            ):
+                old.consumed_at = utcnow()
     db.commit()
+    if delivery_status == "rejected":
+        raise HTTPException(503, "SMS delivery unavailable")
     return {"message": "If delivery is available, a code has been sent"}
 
 
@@ -190,35 +223,38 @@ def verify_code(
     if peer_attempts >= 30 or mobile_attempts >= 10:
         raise HTTPException(429, "Try again later")
     db.add(AuthVerifyAttempt(mobile_digest=mobile_key, requester_digest=peer_key))
-    challenge = db.scalar(
-        select(AuthChallenge)
-        .where(AuthChallenge.mobile_digest == mobile_key)
-        .order_by(AuthChallenge.created_at.desc(), AuthChallenge.id.desc())
-        .with_for_update()
+    challenges = list(
+        db.scalars(
+            select(AuthChallenge)
+            .where(
+                AuthChallenge.mobile_digest == mobile_key,
+                AuthChallenge.consumed_at.is_(None),
+                AuthChallenge.delivery_status.in_(("pending", "accepted")),
+            )
+            .order_by(AuthChallenge.created_at.desc(), AuthChallenge.id.desc())
+            .with_for_update()
+        )
     )
-    if (
-        not challenge
-        or challenge.consumed_at
-        or aware(challenge.expires_at) <= utcnow()
-        or challenge.attempts >= 5
-    ):
+    active = [
+        item for item in challenges if aware(item.expires_at) > utcnow() and item.attempts < 5
+    ][:2]
+    if not active or max(item.attempts for item in active) >= 5:
         db.commit()
         raise HTTPException(400, "Invalid or expired code")
-    challenge.attempts += 1
     normalized_code = "".join(str(int(char)) for char in body.code)
-    if not hmac.compare_digest(challenge.code_digest, digest(normalized_code, settings.otp_pepper)):
+    code_key = digest(normalized_code, settings.otp_pepper)
+    challenge = next(
+        (item for item in active if hmac.compare_digest(item.code_digest, code_key)), None
+    )
+    # Keep the guessing counter identical on every concurrently usable code.
+    attempts = max(item.attempts for item in active) + 1
+    for item in active:
+        item.attempts = attempts
+    if challenge is None:
         db.commit()
-        raise HTTPException(429 if challenge.attempts >= 5 else 400, "Invalid or expired code")
-    challenge.consumed_at = utcnow()
-    # Older open challenges are invalidated after successful login.
-    for old in db.scalars(
-        select(AuthChallenge).where(
-            AuthChallenge.mobile_digest == mobile_key,
-            AuthChallenge.id != challenge.id,
-            AuthChallenge.consumed_at.is_(None),
-        )
-    ):
-        old.consumed_at = utcnow()
+        raise HTTPException(429 if attempts >= 5 else 400, "Invalid or expired code")
+    for item in challenges:
+        item.consumed_at = utcnow()
     user = db.scalar(select(User).where(User.mobile_e164 == mobile))
     if user is None:
         user = User(mobile_e164=mobile, role="customer")
