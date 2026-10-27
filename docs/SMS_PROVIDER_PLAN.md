@@ -1,6 +1,14 @@
 # SMS provider decision and activation plan
 
-**Status: decision pending.** No real SMS provider or adapter is configured. The only current choices are `unconfigured` (challenge requests return HTTP 503) and an explicitly enabled, in-memory `fake` provider for development and tests. Selecting a vendor, approving an OTP template, and authorizing activation require user approval. This document makes no vendor-specific API, price, coverage, or delivery guarantee claims; verify each candidate against its current official documentation and a private sandbox before selection.
+**Status: Kavenegar preferred; offline only.** The user prefers Kavenegar. An isolated Lookup adapter prepares parameters and interprets simulated responses, but it is not selected by application runtime and has no live transport. The only current choices are `unconfigured` (challenge requests return HTTP 503) and an explicitly enabled, in-memory `fake` provider for development and tests. No real SMS delivery is authorized.
+
+## Kavenegar offline adapter (M6-A6A)
+
+The [official REST documentation](https://kavenegar.com/rest.html) describes verification Lookup with required `receptor`, `token`, and `template` parameters. The adapter takes AROMAN's normalized `+989...` mobile and maps it to the documented domestic `09...` form only for the simulated request. Its six-digit OTP maps to `token`; a template name must be supplied explicitly. An approved verification template is still required in the user's Kavenegar panel. The adapter makes one call to an injected simulation interface and never retries. It includes no HTTP client, API key, endpoint, or runtime selector.
+
+The simulated `return.status=200` plus one valid message entry with a documented accepted message status means provider acceptance, not handset delivery. Documented, unambiguous refusal statuses such as `424` (template missing or unapproved) raise `SMSDeliveryRejected`. Generic failure (`402`), server unavailable (`409`), unknown codes, contradictory or malformed responses, timeout, and connection failure remain uncertain. The adapter emits only fixed, nonsensitive exception messages and no logs. Offline tests block socket connections.
+
+The official URL format places the API key in the **URL path**, and Lookup places the OTP in request parameters. A future live transport must prevent full URLs, query strings, request bodies, and raw provider exceptions from appearing in logs, traces, proxies, error reports, or client responses. No credentials have been added to source, tests, CI, `.env`, or `.env.example`. Real delivery, pricing, idempotency, and sandbox behavior have not been verified. A separate, explicit activation milestone and authorization are required before **any** provider network call.
 
 ## Delivery requirements
 
@@ -12,7 +20,7 @@
 
 ## Candidate evaluation and approval gate
 
-Record the following for each candidate using links to **current official provider documentation**, dated sandbox results, and a commercial/compliance review. Mark any undocumented claim **requires verification**. No candidate is endorsed here.
+Record the following using links to **current official provider documentation**, dated sandbox results, and a commercial/compliance review. Mark any undocumented claim **requires verification**. Provider preference does not imply approval to activate.
 
 | Criterion | Evidence needed before approval |
 |---|---|
@@ -24,13 +32,13 @@ Record the following for each candidate using links to **current official provid
 | Costs | Current OTP/template/message charges, failed submission charges, minimums, taxes, and settlement terms. Obtain a quote; no price is assumed. |
 | Compliance | Iranian delivery and sender requirements, data handling and retention, consent and anti-abuse duties, and applicable contractual/legal review. |
 
-**Decision needed from the user:** approve a specific provider, verified template/sender, budget, permitted operating environment, and data/compliance terms after the evidence above is collected. Implementation and real delivery remain gated on that decision. Do not add a candidate to `SMS_PROVIDER` or inject credentials until approval.
+**Activation decision needed from the user:** approve a verified Kavenegar template, budget, permitted operating environment, and data/compliance terms after the evidence above is collected. Real delivery remains gated on that decision. Do not add Kavenegar to `SMS_PROVIDER` or inject credentials until approval.
 
 ## Configuration and secrets
 
 Current `.env.example` documents `SMS_PROVIDER=unconfigured` and `FAKE_SMS_ENABLED=false`. Settings permit only `unconfigured` and `fake`; fake requires explicit opt-in in development/test and is rejected in staging/production. Unconfigured can start in staging/production but challenge requests fail closed with 503. No live provider variables exist yet.
 
-After provider approval, define names and validation for a provider selector, API credential, approved template identifier, sender identifier if required, and explicit endpoint/region only if the official API requires them. Add placeholder names to `.env.example` only when the adapter is implemented. Load live values from a private secret manager or equivalent deployment secret injection, with separate sandbox/live credentials and least privilege. Never commit credentials, put them in URLs or logs, return them in HTTP responses, or place them in CI output. Specify rotation, revocation, and access ownership before activation.
+In a separate activation milestone, define names and validation for a provider selector, API credential, approved template identifier, and explicit endpoint only if required. Add configuration placeholders only when live activation is authorized. Load live values from a private secret manager or equivalent deployment secret injection, with separate sandbox/live credentials and least privilege. Kavenegar's documented URL path necessarily contains its API key; protect and redact the complete URL everywhere. Never commit credentials, return them in HTTP responses, or place them in CI output. Specify rotation, revocation, and access ownership before activation.
 
 ## Delivery outcomes and API behavior
 
@@ -56,7 +64,7 @@ The send result is finalized in a second transaction under the mobile advisory l
 
 Verification considers at most the previous accepted challenge and its pending replacement. Each invalid guess increments the same counter on both active rows; five invalid guesses exhaust both codes. A new reservation inherits the counter of a still-verifiable previous code, so overlap does not refresh that budget. An already exhausted previous code cannot disable a newly delivered replacement. A successful match consumes all open challenges for the mobile in one transaction with session creation. Existing peer and mobile hourly verification limits, origin checks, validation redaction, account-neutral responses, and cookie behavior remain in place.
 
-External delivery and database updates are not atomic. In particular, if the application knows a send was definitively rejected but cannot commit `rejected`, the pending code remains verifiable and blocks new requests until expiry; a code cannot authenticate unless someone obtained it. There is no durable proof of whether an uncertain submission reached the provider and no safe automatic retry. A successful verification during an in-flight send can consume its reservation before delivery completes, so that delivered code will already be unusable. This tradeoff prevents replay. No provider idempotency or delivery-status reconciliation exists. Only `unconfigured` and development/test `fake` providers are implemented; live SMS remains unconfigured.
+External delivery and database updates are not atomic. In particular, if the application knows a send was definitively rejected but cannot commit `rejected`, the pending code remains verifiable and blocks new requests until expiry; a code cannot authenticate unless someone obtained it. There is no durable proof of whether an uncertain submission reached the provider and no safe automatic retry. A successful verification during an in-flight send can consume its reservation before delivery completes, so that delivered code will already be unusable. This tradeoff prevents replay. No provider idempotency or delivery-status reconciliation exists. Only `unconfigured` and development/test `fake` providers are selectable; the Kavenegar adapter is offline only and live SMS remains unconfigured.
 
 M6-A4B privacy scope: OTP challenge and delivery-state records store HMAC digests, not plaintext codes or mobile numbers. This change adds no plaintext mobile field to those records and does not log OTPs, full mobiles, provider credentials, or raw provider exceptions. The pre-existing `users.mobile_e164` account identity column stores a full mobile number and is explicitly out of scope; record its privacy and security review separately. This milestone does not remediate that column.
 
