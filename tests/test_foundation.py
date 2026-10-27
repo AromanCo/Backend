@@ -9,7 +9,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from aroman.authentication.api import client_digest, digest
+from aroman.authentication.api import aware, client_digest, digest
 from aroman.authentication.phone import normalize_mobile
 from aroman.authentication.sms import UnconfiguredSMS, get_sms_provider
 from aroman.core.config import Settings, get_settings
@@ -235,7 +235,7 @@ def test_unconfigured_sms_fails_safely(client, sms):
         app.dependency_overrides.clear()
 
 
-def test_failed_sms_delivery_rolls_back_challenge_and_allows_retry(sms):
+def test_uncertain_sms_delivery_reserves_challenge_and_blocks_retry(sms, caplog):
     mobile = "09128881234"
 
     class FailingSMS:
@@ -244,7 +244,8 @@ def test_failed_sms_delivery_rolls_back_challenge_and_allows_retry(sms):
         def send_otp(self, recipient: str, code: str) -> None:
             self.attempted_code = code
             raise RuntimeError(
-                f"carrier private failure otp={code} credential=SMS_API_SECRET_SENTINEL"
+                f"carrier private failure recipient={recipient} otp={code} "
+                "credential=SMS_API_SECRET_SENTINEL"
             )
 
     failing_sms = FailingSMS()
@@ -262,12 +263,22 @@ def test_failed_sms_delivery_rolls_back_challenge_and_allows_retry(sms):
             assert mobile not in failed.text
             assert "carrier private failure" not in failed.text
             assert "SMS_API_SECRET_SENTINEL" not in failed.text
+            assert failing_sms.attempted_code not in caplog.text
+            assert mobile not in caplog.text
+            assert normalize_mobile(mobile) not in caplog.text
+            assert "SMS_API_SECRET_SENTINEL" not in caplog.text
 
             mobile_key = digest(normalize_mobile(mobile), get_settings().otp_pepper)
             with Session(get_engine()) as db:
-                assert db.scalar(
+                challenge = db.scalar(
                     select(AuthChallenge).where(AuthChallenge.mobile_digest == mobile_key)
-                ) is None
+                )
+                assert challenge is not None
+                assert challenge.delivery_status == "pending"
+                assert aware(challenge.expires_at) > utcnow()
+            again = isolated.post("/api/v1/auth/challenges", json={"mobile": mobile})
+            assert again.status_code == 429
+            assert len(sms.messages) == 0
     finally:
         if had_previous_override:
             app.dependency_overrides[get_sms_provider] = previous_override
@@ -275,20 +286,15 @@ def test_failed_sms_delivery_rolls_back_challenge_and_allows_retry(sms):
             app.dependency_overrides.pop(get_sms_provider, None)
 
     with TestClient(app, client=("192.0.2.45", 50002)) as recovered:
-        succeeded = recovered.post("/api/v1/auth/challenges", json={"mobile": mobile})
-        assert succeeded.status_code == 202
-        assert sms.messages[-1][0] == normalize_mobile(mobile)
-        assert sms.messages[-1][1] not in succeeded.text
-
-        mobile_key = digest(normalize_mobile(mobile), get_settings().otp_pepper)
-        with Session(get_engine()) as db:
-            challenge = db.scalar(
-                select(AuthChallenge).where(AuthChallenge.mobile_digest == mobile_key)
-            )
-            assert challenge is not None
+        assert (
+            recovered.post(
+                "/api/v1/auth/verify", json={"mobile": mobile, "code": failing_sms.attempted_code}
+            ).status_code
+            == 200
+        )
 
 
-def test_delivery_before_failed_commit_leaves_code_unusable(sms):
+def test_reservation_commit_failure_prevents_sms(sms):
     mobile = "09128881235"
 
     class FailingCommitSession(Session):
@@ -308,21 +314,59 @@ def test_delivery_before_failed_commit_leaves_code_unusable(sms):
 
     assert result.status_code == 503
     assert result.json() == {"detail": "Database unavailable"}
-    assert len(sms.messages) == 1
-    assert sms.messages[0][1] not in result.text
+    assert len(sms.messages) == 0
     assert mobile not in result.text
     with Session(get_engine()) as db:
-        assert db.scalar(
+        assert (
+            db.scalar(
+                select(AuthChallenge).where(
+                    AuthChallenge.mobile_digest
+                    == digest(normalize_mobile(mobile), get_settings().otp_pepper)
+                )
+            )
+            is None
+        )
+
+
+def test_accepted_send_survives_failed_finalization_commit(sms):
+    mobile = "09128881241"
+
+    class FailingSecondCommitSession(Session):
+        commits = 0
+
+        def commit(self) -> None:
+            self.commits += 1
+            if self.commits == 2:
+                raise SQLAlchemyError("simulated finalization failure")
+            super().commit()
+
+    def failing_db():
+        with FailingSecondCommitSession(get_engine()) as db:
+            yield db
+
+    app.dependency_overrides[get_db] = failing_db
+    try:
+        with TestClient(app, client=("192.0.2.47", 50004)) as isolated:
+            result = isolated.post("/api/v1/auth/challenges", json={"mobile": mobile})
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+    assert result.status_code == 503
+    assert len(sms.messages) == 1
+    with Session(get_engine()) as db:
+        challenge = db.scalar(
             select(AuthChallenge).where(
                 AuthChallenge.mobile_digest
                 == digest(normalize_mobile(mobile), get_settings().otp_pepper)
             )
-        ) is None
-    with TestClient(app, client=("192.0.2.46", 50003)) as isolated:
-        rejected = isolated.post(
-            "/api/v1/auth/verify", json={"mobile": mobile, "code": sms.messages[0][1]}
         )
-    assert rejected.status_code == 400
+        assert challenge.delivery_status == "pending"
+    with TestClient(app, client=("192.0.2.47", 50004)) as isolated:
+        assert (
+            isolated.post(
+                "/api/v1/auth/verify", json={"mobile": mobile, "code": sms.messages[-1][1]}
+            ).status_code
+            == 200
+        )
 
 
 def test_otp_expiry_replay_and_attempt_limit(client, sms):

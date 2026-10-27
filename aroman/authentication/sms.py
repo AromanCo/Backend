@@ -7,6 +7,10 @@ class SMSProvider(Protocol):
     def send_otp(self, mobile: str, code: str) -> None: ...
 
 
+class SMSDeliveryRejected(Exception):
+    """Only raise when the provider definitively refused submission."""
+
+
 class UnconfiguredSMS:
     def send_otp(self, mobile: str, code: str) -> None:
         raise RuntimeError("SMS delivery is not configured")

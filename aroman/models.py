@@ -12,6 +12,8 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -40,7 +42,23 @@ class AuthChallenge(AuditMixin, Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
-    __table_args__ = (CheckConstraint("attempts >= 0", name="ck_challenge_attempts"),)
+    delivery_status: Mapped[str] = mapped_column(
+        String(16), default="pending", server_default="pending"
+    )
+    __table_args__ = (
+        CheckConstraint("attempts >= 0", name="ck_challenge_attempts"),
+        CheckConstraint(
+            "delivery_status IN ('pending', 'accepted', 'rejected')",
+            name="ck_challenge_delivery_status",
+        ),
+        Index(
+            "uq_challenge_open_pending_mobile",
+            "mobile_digest",
+            unique=True,
+            postgresql_where=text("delivery_status = 'pending' AND consumed_at IS NULL"),
+            sqlite_where=text("delivery_status = 'pending' AND consumed_at IS NULL"),
+        ),
+    )
 
 
 class AuthSession(AuditMixin, Base):
@@ -61,9 +79,7 @@ class AuthVerifyAttempt(Base):
     id: Mapped[uuid.UUID] = uuid_column()
     mobile_digest: Mapped[str] = mapped_column(String(64), index=True)
     requester_digest: Mapped[str] = mapped_column(String(64), index=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default="CURRENT_TIMESTAMP"
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Brand(AuditMixin, Base):
