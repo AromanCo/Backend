@@ -1,17 +1,21 @@
+import ipaddress
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlsplit
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", extra="ignore", hide_input_in_errors=True
+    )
 
     environment: str = "development"
-    database_url: str = ""
-    otp_pepper: str = ""
-    session_pepper: str = ""
+    database_url: str = Field(default="", repr=False)
+    otp_pepper: str = Field(default="", repr=False)
+    session_pepper: str = Field(default="", repr=False)
     sms_provider: Literal["unconfigured", "fake"] = "unconfigured"
     fake_sms_enabled: bool = False
     cors_origins: str = "http://localhost:3000"
@@ -27,6 +31,17 @@ class Settings(BaseSettings):
     def check_environment(cls, value: str) -> str:
         if value not in {"development", "test", "production", "staging"}:
             raise ValueError("Invalid environment")
+        return value
+
+    @field_validator("trusted_proxy_cidrs")
+    @classmethod
+    def check_trusted_proxy_cidrs(cls, value: str) -> str:
+        try:
+            for cidr in value.split(","):
+                if cidr.strip():
+                    ipaddress.ip_network(cidr.strip(), strict=True)
+        except ValueError:
+            raise ValueError("Invalid trusted proxy CIDR") from None
         return value
 
     @model_validator(mode="after")
@@ -50,8 +65,25 @@ class Settings(BaseSettings):
                 not origin.startswith("https://") for origin in self.origins
             ):
                 raise ValueError("Real environments require explicit HTTPS CORS origins")
-        if "*" in self.origins or any(origin.endswith("/") for origin in self.origins):
-            raise ValueError("CORS origins must be explicit origins without trailing slashes")
+        for origin in self.origins:
+            try:
+                parsed = urlsplit(origin)
+                valid = (
+                    parsed.scheme in {"http", "https"}
+                    and bool(parsed.hostname)
+                    and parsed.port != 0
+                    and not parsed.username
+                    and not parsed.password
+                    and not parsed.path
+                    and not parsed.query
+                    and not parsed.fragment
+                    and "*" not in origin
+                    and origin == f"{parsed.scheme}://{parsed.netloc}"
+                )
+            except ValueError:
+                valid = False
+            if not valid:
+                raise ValueError("CORS origins must be explicit origins without paths or wildcards")
         if self.cookie_samesite not in {"lax", "strict", "none"}:
             raise ValueError("Invalid SameSite policy")
         if self.cookie_samesite == "none" and not self.cookie_secure:
