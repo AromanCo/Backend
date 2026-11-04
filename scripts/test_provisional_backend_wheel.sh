@@ -127,33 +127,26 @@ for run in run1 run2; do
   (( ${#wheel[@]} == 1 )) || { echo "expected exactly one wheel for $run" >&2; exit 3; }
   sha256sum "${wheel[0]}" > "$EVIDENCE_DIR/logs/backend-wheel-$run.sha256"
 done
-"$PYTHON" - "$EVIDENCE_DIR/wheels/backend/run1" "$EVIDENCE_DIR/wheels/backend/run2" "$EVIDENCE_DIR/logs/backend-wheel-zip-comparison.json" <<'PY'
-from pathlib import Path
-from zipfile import ZipFile
-import hashlib, json, sys
-a_dir, b_dir, output = map(Path, sys.argv[1:])
-a_path, = a_dir.glob('*.whl'); b_path, = b_dir.glob('*.whl')
-with ZipFile(a_path) as a, ZipFile(b_path) as b:
-    an, bn = sorted(a.namelist()), sorted(b.namelist())
-    members=[]
-    for name in sorted(set(an) | set(bn)):
-        if name not in an or name not in bn:
-            members.append({'name':name,'run1_present':name in an,'run2_present':name in bn})
-            continue
-        ai, bi = a.getinfo(name), b.getinfo(name)
-        ad, bd = a.read(name), b.read(name)
-        if ai.date_time != bi.date_time or ad != bd or ai.compress_type != bi.compress_type:
-            members.append({'name':name,'timestamp_run1':ai.date_time,'timestamp_run2':bi.date_time,
-                            'content_equal':ad==bd,'content_sha256_run1':hashlib.sha256(ad).hexdigest(),
-                            'content_sha256_run2':hashlib.sha256(bd).hexdigest(),
-                            'compression_equal':ai.compress_type==bi.compress_type})
-result={'run1_sha256':hashlib.sha256(a_path.read_bytes()).hexdigest(),
-        'run2_sha256':hashlib.sha256(b_path.read_bytes()).hexdigest(),
-        'wheel_byte_identical':a_path.read_bytes()==b_path.read_bytes(),
-        'member_names_equal':an==bn,'differing_members':members}
-Path(output).write_text(json.dumps(result,indent=2)+'\n')
-print(json.dumps(result,indent=2))
-PY
+printf '%q ' "$PYTHON" "$ROOT/scripts/compare_provisional_wheels.py" \
+  --run1 "$EVIDENCE_DIR/wheels/backend/run1" \
+  --run2 "$EVIDENCE_DIR/wheels/backend/run2" \
+  --evidence "$EVIDENCE_DIR/logs/backend-wheel-zip-comparison.json" \
+  > "$EVIDENCE_DIR/logs/backend-wheel-reproducibility.command"
+printf '\n' >> "$EVIDENCE_DIR/logs/backend-wheel-reproducibility.command"
+set +e
+"$PYTHON" "$ROOT/scripts/compare_provisional_wheels.py" \
+  --run1 "$EVIDENCE_DIR/wheels/backend/run1" \
+  --run2 "$EVIDENCE_DIR/wheels/backend/run2" \
+  --evidence "$EVIDENCE_DIR/logs/backend-wheel-zip-comparison.json" \
+  > "$EVIDENCE_DIR/logs/backend-wheel-reproducibility.log" 2>&1
+rc=$?
+set -e
+printf '%s\n' "$rc" > "$EVIDENCE_DIR/logs/backend-wheel-reproducibility.exit"
+if (( rc != 0 )); then
+  cat "$EVIDENCE_DIR/logs/backend-wheel-reproducibility.log" >&2
+  echo 'wheel reproducibility failed; refusing to install or package the wheel' >&2
+  exit "$rc"
+fi
 wheel=("$EVIDENCE_DIR"/wheels/backend/run1/*.whl)
 cp "${wheel[0]}" "$EVIDENCE_DIR/wheels/backend/aroman_backend-0.1.0-py3-none-any.whl"
 sha256sum "$EVIDENCE_DIR/wheels/backend/aroman_backend-0.1.0-py3-none-any.whl" > "$EVIDENCE_DIR/logs/backend-wheel.sha256"

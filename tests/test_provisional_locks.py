@@ -2,8 +2,10 @@ import csv
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -300,3 +302,110 @@ def test_wheel_verifier_refuses_existing_evidence_output(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="already exists"):
         _run_wheel_verifier(monkeypatch, manifest, root, locks, output)
     assert output.read_text() == "preserve me"
+
+
+def _make_test_wheel(path, member_content):
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("sample/__init__.py", member_content)
+
+
+def _run_wheel_comparison(run1, run2, evidence):
+    script = Path(__file__).parents[1] / "scripts/compare_provisional_wheels.py"
+    return subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--run1",
+            str(run1),
+            "--run2",
+            str(run2),
+            "--evidence",
+            str(evidence),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_wheel_comparison_rejects_unequal_wheels_and_preserves_diagnostics(tmp_path):
+    run1, run2 = tmp_path / "run1", tmp_path / "run2"
+    run1.mkdir()
+    run2.mkdir()
+    _make_test_wheel(run1 / "sample-1.0-py3-none-any.whl", b"build one")
+    _make_test_wheel(run2 / "sample-1.0-py3-none-any.whl", b"build two")
+    evidence = tmp_path / "evidence" / "comparison.json"
+
+    result = _run_wheel_comparison(run1, run2, evidence)
+
+    report = json.loads(evidence.read_text())
+    assert result.returncode == 1
+    assert report["passed"] is False
+    assert report["sha256_equal"] is False
+    assert report["byte_identical"] is False
+    assert report["zip_members_equal"] is False
+    assert report["differing_members"]
+
+    build_script = BUILD_SCRIPT.read_text()
+    comparison_call = build_script.index("compare_provisional_wheels.py")
+    failure_guard = build_script.index("if (( rc != 0 )); then", comparison_call)
+    failure_exit = build_script.index('exit "$rc"', failure_guard)
+    install_step = build_script.index("backend-wheel-install.log", failure_exit)
+    assert comparison_call < failure_guard < failure_exit < install_step
+
+
+def test_unequal_wheels_stop_shell_before_following_install_step(tmp_path):
+    run1, run2 = tmp_path / "run1", tmp_path / "run2"
+    run1.mkdir()
+    run2.mkdir()
+    _make_test_wheel(run1 / "sample-1.0-py3-none-any.whl", b"first")
+    _make_test_wheel(run2 / "sample-1.0-py3-none-any.whl", b"second")
+    evidence = tmp_path / "comparison.json"
+    sentinel = tmp_path / "install-was-run"
+    comparator = Path(__file__).parents[1] / "scripts/compare_provisional_wheels.py"
+    command = shlex.join(
+        [
+            sys.executable,
+            str(comparator),
+            "--run1",
+            str(run1),
+            "--run2",
+            str(run2),
+            "--evidence",
+            str(evidence),
+        ]
+    )
+    guarded_shell = (
+        "set +e\n"
+        f"{command}\n"
+        "rc=$?\n"
+        "set -e\n"
+        'if (( rc != 0 )); then exit "$rc"; fi\n'
+        f"touch {shlex.quote(str(sentinel))}\n"
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", guarded_shell], capture_output=True, text=True, check=False
+    )
+
+    assert result.returncode == 1
+    assert not sentinel.exists()
+    assert json.loads(evidence.read_text())["passed"] is False
+
+
+def test_wheel_comparison_accepts_identical_wheels(tmp_path):
+    run1, run2 = tmp_path / "run1", tmp_path / "run2"
+    run1.mkdir()
+    run2.mkdir()
+    wheel_name = "sample-1.0-py3-none-any.whl"
+    _make_test_wheel(run1 / wheel_name, b"identical build")
+    (run2 / wheel_name).write_bytes((run1 / wheel_name).read_bytes())
+    evidence = tmp_path / "comparison.json"
+
+    result = _run_wheel_comparison(run1, run2, evidence)
+
+    report = json.loads(evidence.read_text())
+    assert result.returncode == 0
+    assert report["passed"] is True
+    assert report["sha256_equal"] is True
+    assert report["byte_identical"] is True
