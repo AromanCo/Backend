@@ -1,0 +1,4 @@
+# PROVISIONAL — NOT APPROVED
+--only-binary=:all:
+# Static PEP 517 backend requirement, pinned to the retained P5/R1 wheel.
+setuptools==84.2.1
