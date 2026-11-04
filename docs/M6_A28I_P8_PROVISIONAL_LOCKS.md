@@ -83,7 +83,15 @@ original external directories and are not modified by this change.
   and `pyproject-hooks==1.3.3`; the wheel build used `--no-isolation`.
 - The Backend wheel installed offline with `--no-deps`. Its runtime inventory
   matched exactly at 28/28, package imports resolved from the disposable
-  environment's `site-packages`, and `pip check` passed.
+  environment's `site-packages`, and `pip check` passed. The installed wheel
+  digest was `20548edd21c1967ba591bfaf7cd794bf073d72c450087bba10f0f302a7cdc8f8`.
+- Repeated no-isolation Backend wheel builds were **not byte-reproducible**:
+  run 2 hashed `20548edd21c1967ba591bfaf7cd794bf073d72c450087bba10f0f302a7cdc8f8`
+  and run 3 hashed `6745229f1f0a8b723dd1541751f1dcd9ad15d06fb7b084c895d6a7763d235463`.
+  ZIP member contents and entry names matched; five `.dist-info` entries had
+  different ZIP timestamps. Both wheels and the comparison evidence are kept
+  outside the repositories. Lock-file reproducibility does not imply
+  reproducible application wheel artifacts.
 - Local Backend tests completed: 204 passed, 6 skipped, with 1 deprecation
   warning. PostgreSQL/Docker gated suites were skipped because no disposable
   test service was provisioned.
