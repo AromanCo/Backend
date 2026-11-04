@@ -1,0 +1,109 @@
+# PROVISIONAL — NOT APPROVED
+# Candidate lock generated from retained P5/R1 wheels only.
+# Target: Ubuntu 24.04.5 x86_64, CPython 3.12.3.
+
+--only-binary :all:
+
+alembic==1.20.1 \
+    --hash=sha256:9970712cfb81ea26c8658d378aaa5b8f6ff9146e5bb111d70497c164016cf598
+    # via -r requirements/lock-inputs/runtime.in
+annotated-doc==0.0.5 \
+    --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101
+    # via fastapi
+annotated-types==0.8.0 \
+    --hash=sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0
+    # via pydantic
+anyio==4.16.0 \
+    --hash=sha256:c66ae634e0b8228396b801741beb3294326d4b6102f7bba4041c0dfb58c29026
+    # via
+    #   starlette
+    #   watchfiles
+click==8.5.0 \
+    --hash=sha256:255bc9599cf7748b4b1a446ccc735421bd08a2ae529a8b88597d3de5664ee360
+    # via uvicorn
+fastapi==0.162.0 \
+    --hash=sha256:3785963de305dd09912426cb81f2d230fce98ab3521cdfe97265c8d14983128c
+    # via -r requirements/lock-inputs/runtime.in
+h11==0.16.0 \
+    --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
+    # via uvicorn
+httptools==0.9.0 \
+    --hash=sha256:3e3201fe4d46e0d15d7ff9fafc94a605da9eb82d2c5b9837f0368acb325481f1
+    # via uvicorn
+idna==3.20 \
+    --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
+    # via anyio
+mako==1.4.3 \
+    --hash=sha256:723296007c870bfd6b3f0c3230dba7198096e5269297ebf5e4eff9e7ffa39d4f
+    # via alembic
+markupsafe==3.0.4 \
+    --hash=sha256:8e124f974786f831d6043728e38296969d3579db8896fe004682f5758e613581
+    # via mako
+opentelemetry-api==1.45.2 \
+    --hash=sha256:2cbd737377e710ee740d261c94e93fa0f08e6d037c18f17513cc0a2d94479a34
+    # via fastapi
+psycopg[binary]==3.3.8 \
+    --hash=sha256:ca50af6072ba9ea6866f33021975230c2555d7bfdb9d8f94ca3af5c3d1bf2167
+    # via -r requirements/lock-inputs/runtime.in
+psycopg-binary==3.3.8 \
+    --hash=sha256:a7cdba018e4decf3837793c1e18dbe3dd71709adef54892ab83d81c00e866dc3
+    # via psycopg
+pydantic==2.14.2 \
+    --hash=sha256:7efbf7507b937931cd32a5755acb00ea1cf5ccb1d4e8067a5850d5069e382118
+    # via
+    #   fastapi
+    #   pydantic-settings
+pydantic-core==2.50.2 \
+    --hash=sha256:9667637665acba166a7dbbc786f14c50512d3a01f7199e0e1a13b929e92d7c7a
+    # via pydantic
+pydantic-settings==2.16.2 \
+    --hash=sha256:8d523e5c129b097686bde019bd6109bff53f4c8c3f63f1ddf9933ffa42e5ab4f
+    # via -r requirements/lock-inputs/runtime.in
+python-dotenv==1.2.4 \
+    --hash=sha256:42269a8a5b3fd54ffa6f3d84b18abed50064717576b4ecf03dc4a55d8aa04fdc
+    # via
+    #   pydantic-settings
+    #   uvicorn
+pyyaml==6.0.3 \
+    --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc
+    # via uvicorn
+sqlalchemy==2.1.8 \
+    --hash=sha256:6b9844ecf59d389648cf3ce2b387475f81b02c2d32f16b95a554ca535a68ba13
+    # via
+    #   -r requirements/lock-inputs/runtime.in
+    #   alembic
+starlette==1.10.0 \
+    --hash=sha256:478c0ab3b4ced6e82719849c118fa406f0278a3499c1a898cd15cd31bdc38ce4
+    # via fastapi
+typing-extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
+    # via
+    #   alembic
+    #   anyio
+    #   fastapi
+    #   opentelemetry-api
+    #   psycopg
+    #   pydantic
+    #   pydantic-core
+    #   pydantic-settings
+    #   sqlalchemy
+    #   starlette
+    #   typing-inspection
+typing-inspection==0.4.4 \
+    --hash=sha256:65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147
+    # via
+    #   fastapi
+    #   pydantic
+    #   pydantic-settings
+uvicorn[standard]==0.54.0 \
+    --hash=sha256:505bdb0f318731d45f1f712071fc781a8981f6847a31c902c9f5e652d4f67faf
+    # via -r requirements/lock-inputs/runtime.in
+uvloop==0.23.0 \
+    --hash=sha256:090865d8ce7a03986755a3ce711b7dd0d4b44eb14ab74368b717f3fad1180208
+    # via uvicorn
+watchfiles==1.3.0 \
+    --hash=sha256:b5768b49e426fd5b550b012c866db347cdf15c398ef98dc557b6e6b72fa74cd1
+    # via uvicorn
+websockets==17.4 \
+    --hash=sha256:9ae1429ee9e52b139167ed0169757806a27ed7307e942e8c62037a9184e9843b
+    # via uvicorn

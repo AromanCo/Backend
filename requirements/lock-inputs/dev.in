@@ -1,0 +1,13 @@
+# PROVISIONAL — NOT APPROVED
+--only-binary=:all:
+# Complete direct runtime + dev candidate inputs for Ubuntu 24.04.5 x86_64 / CPython 3.12.3.
+alembic==1.20.1
+fastapi==0.162.0
+psycopg[binary]==3.3.8
+pydantic-settings==2.16.2
+sqlalchemy==2.1.8
+uvicorn[standard]==0.54.0
+httpx==0.28.1
+mypy==1.20.2
+pytest==9.2.0
+ruff==0.17.3
