@@ -6,16 +6,52 @@ LOCK_DIR="$ROOT/requirements/locks/$TARGET"
 EVIDENCE_DIR="${AROMAN_EVIDENCE_DIR:?Set evidence directory outside both repositories}"
 PYTHON="${AROMAN_PYTHON:?Set retained candidate Python 3.12.3}"
 PIP="${AROMAN_PIP:?Set retained candidate pip 26.3}"
-SOURCE_REV="${AROMAN_SOURCE_REV:-0be24c4597bd693e70348243c26e550a20a8ad0e}"
-BOOTSTRAP="$EVIDENCE_DIR/venvs/bootstrap"
-RUNTIME="$EVIDENCE_DIR/venvs/runtime"
-[[ "$EVIDENCE_DIR" != "$ROOT"/* && "$EVIDENCE_DIR" != *'/FrontEnd/'* ]] || { echo 'evidence must be outside both repositories' >&2; exit 2; }
-mkdir -p "$EVIDENCE_DIR/source-backend" "$EVIDENCE_DIR/wheels/backend"
-printf 'source_revision=%s\n' "$SOURCE_REV" > "$EVIDENCE_DIR/logs/backend-wheel-build-command.txt"
-git -C "$ROOT" archive --format=tar "$SOURCE_REV" | tar -xf - -C "$EVIDENCE_DIR/source-backend"
+BOOTSTRAP_ENV="${AROMAN_BOOTSTRAP_ENV:?Set retained, offline-verified candidate bootstrap environment}"
+RUNTIME_ENV="${AROMAN_RUNTIME_ENV:?Set retained, offline-verified candidate runtime environment}"
+SOURCE_REV='0be24c4597bd693e70348243c26e550a20a8ad0e'
+if [[ -n "${AROMAN_SOURCE_REV+x}" ]]; then
+  echo 'AROMAN_SOURCE_REV override is not supported; source is fixed by P8 authorization' >&2
+  exit 2
+fi
+cd "$ROOT"
+EVIDENCE_DIR="$(python3 "$ROOT/scripts/provisional_safety.py" --check-only --evidence "$EVIDENCE_DIR" --source-revision "$SOURCE_REV")"
+BOOTSTRAP="$(python3 -c 'from scripts.provisional_safety import validate_external_directory; print(validate_external_directory(__import__("sys").argv[1]))' "$BOOTSTRAP_ENV")"
+RUNTIME="$(python3 -c 'from scripts.provisional_safety import validate_external_directory; print(validate_external_directory(__import__("sys").argv[1]))' "$RUNTIME_ENV")"
+EVIDENCE_DIR="$(python3 "$ROOT/scripts/provisional_safety.py" --evidence "$EVIDENCE_DIR" --source-revision "$SOURCE_REV")"
+mkdir -p "$EVIDENCE_DIR/source-backend" "$EVIDENCE_DIR/wheels/backend/run1" "$EVIDENCE_DIR/wheels/backend/run2" "$EVIDENCE_DIR/logs" "$EVIDENCE_DIR/inventories"
+env | awk -F= '/^PIP_/ {print $1 "=<redacted>"}' | sort > "$EVIDENCE_DIR/logs/inherited-pip-settings.txt"
+while IFS= read -r name; do unset "$name"; done < <(export -p | sed -n 's/^declare -x \(PIP_[A-Za-z0-9_]*\)=.*/\1/p')
+export PIP_CONFIG_FILE=/dev/null PIP_NO_INDEX=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PYTHONDONTWRITEBYTECODE=1
+ACTUAL_REV="$(git -C "$ROOT" rev-parse "$SOURCE_REV^{commit}")"
+[[ "$ACTUAL_REV" == "$SOURCE_REV" ]] || { echo 'authorized source commit unavailable or mismatched' >&2; exit 2; }
+TREE_SHA="$(git -C "$ROOT" rev-parse "$SOURCE_REV^{tree}")"
+SOURCE_DATE_EPOCH="$(git -C "$ROOT" show -s --format=%ct "$SOURCE_REV")"
+export SOURCE_DATE_EPOCH
+{
+  printf 'authorized_source_revision=%s\nresolved_source_revision=%s\nsource_tree=%s\nsource_date_epoch=%s\n' "$SOURCE_REV" "$ACTUAL_REV" "$TREE_SHA" "$SOURCE_DATE_EPOCH"
+} > "$EVIDENCE_DIR/source-metadata.txt"
+git -C "$ROOT" archive --format=tar "$SOURCE_REV" | tee "$EVIDENCE_DIR/source-backend.tar" | tar -xf - -C "$EVIDENCE_DIR/source-backend"
+sha256sum "$EVIDENCE_DIR/source-backend.tar" > "$EVIDENCE_DIR/source-archive.sha256"
+printf 'source_revision=%s\nsource_tree=%s\nsource_date_epoch=%s\n' "$SOURCE_REV" "$TREE_SHA" "$SOURCE_DATE_EPOCH" > "$EVIDENCE_DIR/logs/backend-wheel-build-command.txt"
 printf 'pyproject_sha256=' >> "$EVIDENCE_DIR/logs/backend-wheel-build-command.txt"
 sha256sum "$EVIDENCE_DIR/source-backend/pyproject.toml" >> "$EVIDENCE_DIR/logs/backend-wheel-build-command.txt"
+printf 'source_archive_command=git -C %q archive --format=tar %q | tee %q | tar -xf - -C %q\n' "$ROOT" "$SOURCE_REV" "$EVIDENCE_DIR/source-backend.tar" "$EVIDENCE_DIR/source-backend" >> "$EVIDENCE_DIR/logs/backend-wheel-build-command.txt"
+"$PYTHON" -VV > "$EVIDENCE_DIR/environment-python.txt" 2>&1
+grep -F '3.12.3' "$EVIDENCE_DIR/environment-python.txt" >/dev/null
+"$PIP" --version > "$EVIDENCE_DIR/environment-pip.txt" 2>&1
+grep -F 'pip 26.3 ' "$EVIDENCE_DIR/environment-pip.txt" >/dev/null
+"$BOOTSTRAP/bin/pip-compile" --version > "$EVIDENCE_DIR/environment-pip-tools.txt" 2>&1
+grep -F 'pip-compile, version 7.6.2' "$EVIDENCE_DIR/environment-pip-tools.txt" >/dev/null
+"$PYTHON" -c 'import os,platform,sys,sysconfig; print("os="+platform.platform()); print("machine="+platform.machine()); print("python="+sys.version); print("soabi="+str(sysconfig.get_config_var("SOABI"))); print("SOURCE_DATE_EPOCH="+os.environ.get("SOURCE_DATE_EPOCH",""))' > "$EVIDENCE_DIR/environment-target.txt"
+cat /etc/os-release > "$EVIDENCE_DIR/environment-os-release.txt"
+uname -a > "$EVIDENCE_DIR/environment-uname.txt"
+ldd --version 2>&1 | head -n 1 > "$EVIDENCE_DIR/environment-glibc.txt"
+cp /home/mrq/aroman-evidence/m6-a28i-p5-r1/wheel-tags.txt "$EVIDENCE_DIR/environment-wheel-tags.txt"
+printf 'PIP_CONFIG_FILE=/dev/null\nPIP_NO_INDEX=1\nPIP_NO_CACHE_DIR=1\nPIP_DISABLE_PIP_VERSION_CHECK=1\nPIP_INDEX_URL/PIP_EXTRA_INDEX_URL/PIP_FIND_LINKS/PIP_CACHE_DIR=unset\n' > "$EVIDENCE_DIR/environment-pip-policy.txt"
 
+printf '%q ' "$BOOTSTRAP/bin/python" - "$EVIDENCE_DIR/source-backend" > "$EVIDENCE_DIR/logs/pep517-hook.command"
+printf '\n' >> "$EVIDENCE_DIR/logs/pep517-hook.command"
+set +e
 "$BOOTSTRAP/bin/python" - "$EVIDENCE_DIR/source-backend" > "$EVIDENCE_DIR/logs/pep517-hook-raw.log" 2>&1 <<'PY'
 from pathlib import Path
 import json, sys, tomllib
@@ -28,8 +64,14 @@ result = {'backend':'setuptools.build_meta','static_requires':static,
           'hook':'get_requires_for_build_wheel','config_settings':{},'dynamic_requires':dynamic}
 print('PEP517_HOOK_RESULT_JSON=' + json.dumps(result, sort_keys=True))
 PY
-printf '%s\n' "$?" > "$EVIDENCE_DIR/logs/pep517-hook.exit"
+rc=$?
+set -e
+printf '%s\n' "$rc" > "$EVIDENCE_DIR/logs/pep517-hook.exit"
+(( rc == 0 )) || { cat "$EVIDENCE_DIR/logs/pep517-hook-raw.log" >&2; exit "$rc"; }
 
+printf '%q ' "$BOOTSTRAP/bin/python" - "$EVIDENCE_DIR/logs/pep517-hook-raw.log" "$LOCK_DIR/build.txt" "$LOCK_DIR/bootstrap.txt" "$EVIDENCE_DIR/pep517-closure.json" > "$EVIDENCE_DIR/logs/pep517-closure.command"
+printf '\n' >> "$EVIDENCE_DIR/logs/pep517-closure.command"
+set +e
 "$BOOTSTRAP/bin/python" - "$EVIDENCE_DIR/logs/pep517-hook-raw.log" "$LOCK_DIR/build.txt" "$LOCK_DIR/bootstrap.txt" "$EVIDENCE_DIR/pep517-closure.json" <<'PY'
 import json, re, sys
 from pathlib import Path
@@ -65,21 +107,59 @@ output.write_text(json.dumps(result, indent=2) + '\n')
 print(json.dumps(result, indent=2))
 raise SystemExit(0 if result['closure_pass'] else 1)
 PY
-
-printf '%q ' "$BOOTSTRAP/bin/python" -m build --no-isolation --wheel --outdir "$EVIDENCE_DIR/wheels/backend" "$EVIDENCE_DIR/source-backend" > "$EVIDENCE_DIR/logs/backend-wheel-build-command.txt"
-printf '\n' >> "$EVIDENCE_DIR/logs/backend-wheel-build-command.txt"
-set +e
-PIP_NO_INDEX=1 PIP_NO_CACHE_DIR=1 PYTHONDONTWRITEBYTECODE=1 \
-  "$BOOTSTRAP/bin/python" -m build --no-isolation --wheel --outdir "$EVIDENCE_DIR/wheels/backend" "$EVIDENCE_DIR/source-backend" > "$EVIDENCE_DIR/logs/backend-wheel-build.log" 2>&1
 rc=$?
 set -e
-echo "$rc" > "$EVIDENCE_DIR/logs/backend-wheel-build.exit"
-(( rc == 0 )) || { cat "$EVIDENCE_DIR/logs/backend-wheel-build.log" >&2; exit "$rc"; }
-wheel=("$EVIDENCE_DIR"/wheels/backend/*.whl)
-(( ${#wheel[@]} == 1 )) || { echo 'expected exactly one Backend wheel' >&2; exit 3; }
-sha256sum "${wheel[0]}" > "$EVIDENCE_DIR/logs/backend-wheel.sha256"
+printf '%s\n' "$rc" > "$EVIDENCE_DIR/logs/pep517-closure.exit"
+(( rc == 0 )) || exit "$rc"
 
-printf '%q ' "$PIP" --python "$RUNTIME" install --no-index --no-deps --no-build-isolation "${wheel[0]}" > "$EVIDENCE_DIR/logs/backend-wheel-install-command.txt"
+for run in run1 run2; do
+  out="$EVIDENCE_DIR/wheels/backend/$run"
+  cmd=("$BOOTSTRAP/bin/python" -m build --no-isolation --wheel --outdir "$out" "$EVIDENCE_DIR/source-backend")
+  printf '%q ' "${cmd[@]}" > "$EVIDENCE_DIR/logs/backend-wheel-build-$run.command"
+  printf '\n' >> "$EVIDENCE_DIR/logs/backend-wheel-build-$run.command"
+  set +e
+  "${cmd[@]}" > "$EVIDENCE_DIR/logs/backend-wheel-build-$run.log" 2>&1
+  rc=$?
+  set -e
+  echo "$rc" > "$EVIDENCE_DIR/logs/backend-wheel-build-$run.exit"
+  (( rc == 0 )) || { cat "$EVIDENCE_DIR/logs/backend-wheel-build-$run.log" >&2; exit "$rc"; }
+  wheel=("$out"/*.whl)
+  (( ${#wheel[@]} == 1 )) || { echo "expected exactly one wheel for $run" >&2; exit 3; }
+  sha256sum "${wheel[0]}" > "$EVIDENCE_DIR/logs/backend-wheel-$run.sha256"
+done
+"$PYTHON" - "$EVIDENCE_DIR/wheels/backend/run1" "$EVIDENCE_DIR/wheels/backend/run2" "$EVIDENCE_DIR/logs/backend-wheel-zip-comparison.json" <<'PY'
+from pathlib import Path
+from zipfile import ZipFile
+import hashlib, json, sys
+a_dir, b_dir, output = map(Path, sys.argv[1:])
+a_path, = a_dir.glob('*.whl'); b_path, = b_dir.glob('*.whl')
+with ZipFile(a_path) as a, ZipFile(b_path) as b:
+    an, bn = sorted(a.namelist()), sorted(b.namelist())
+    members=[]
+    for name in sorted(set(an) | set(bn)):
+        if name not in an or name not in bn:
+            members.append({'name':name,'run1_present':name in an,'run2_present':name in bn})
+            continue
+        ai, bi = a.getinfo(name), b.getinfo(name)
+        ad, bd = a.read(name), b.read(name)
+        if ai.date_time != bi.date_time or ad != bd or ai.compress_type != bi.compress_type:
+            members.append({'name':name,'timestamp_run1':ai.date_time,'timestamp_run2':bi.date_time,
+                            'content_equal':ad==bd,'content_sha256_run1':hashlib.sha256(ad).hexdigest(),
+                            'content_sha256_run2':hashlib.sha256(bd).hexdigest(),
+                            'compression_equal':ai.compress_type==bi.compress_type})
+result={'run1_sha256':hashlib.sha256(a_path.read_bytes()).hexdigest(),
+        'run2_sha256':hashlib.sha256(b_path.read_bytes()).hexdigest(),
+        'wheel_byte_identical':a_path.read_bytes()==b_path.read_bytes(),
+        'member_names_equal':an==bn,'differing_members':members}
+Path(output).write_text(json.dumps(result,indent=2)+'\n')
+print(json.dumps(result,indent=2))
+PY
+wheel=("$EVIDENCE_DIR"/wheels/backend/run1/*.whl)
+cp "${wheel[0]}" "$EVIDENCE_DIR/wheels/backend/aroman_backend-0.1.0-py3-none-any.whl"
+sha256sum "$EVIDENCE_DIR/wheels/backend/aroman_backend-0.1.0-py3-none-any.whl" > "$EVIDENCE_DIR/logs/backend-wheel.sha256"
+
+printf 'PIP_NO_INDEX=1 PIP_NO_CACHE_DIR=1 ' > "$EVIDENCE_DIR/logs/backend-wheel-install-command.txt"
+printf '%q ' "$PIP" --python "$RUNTIME" install --no-index --no-deps --no-build-isolation "${wheel[0]}" >> "$EVIDENCE_DIR/logs/backend-wheel-install-command.txt"
 printf '\n' >> "$EVIDENCE_DIR/logs/backend-wheel-install-command.txt"
 set +e
 PIP_NO_INDEX=1 PIP_NO_CACHE_DIR=1 "$PIP" --python "$RUNTIME" install --no-index --no-deps --no-build-isolation "${wheel[0]}" > "$EVIDENCE_DIR/logs/backend-wheel-install.log" 2>&1
@@ -88,6 +168,8 @@ set -e
 echo "$rc" > "$EVIDENCE_DIR/logs/backend-wheel-install.exit"
 (( rc == 0 )) || { cat "$EVIDENCE_DIR/logs/backend-wheel-install.log" >&2; exit "$rc"; }
 
+printf '%q ' "$PIP" --python "$RUNTIME" check > "$EVIDENCE_DIR/logs/backend-wheel-pip-check.command"
+printf '\n' >> "$EVIDENCE_DIR/logs/backend-wheel-pip-check.command"
 set +e
 "$PIP" --python "$RUNTIME" check > "$EVIDENCE_DIR/logs/backend-wheel-pip-check.log" 2>&1
 rc=$?
@@ -95,6 +177,8 @@ set -e
 echo "$rc" > "$EVIDENCE_DIR/logs/backend-wheel-pip-check.exit"
 (( rc == 0 )) || { cat "$EVIDENCE_DIR/logs/backend-wheel-pip-check.log" >&2; exit "$rc"; }
 
+printf '%q ' env DATABASE_URL='postgresql+psycopg://offline:offline@127.0.0.1:5432/offline' OTP_PEPPER=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa SESSION_PEPPER=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "$RUNTIME/bin/python" -I -c 'import pathlib, aroman, aroman.main, aroman.models, aroman.seed; p=pathlib.Path(aroman.__file__).resolve(); assert "site-packages" in p.parts, p; print("aroman_import_origin="+str(p)); print("imports=PASS aroman, aroman.main, aroman.models, aroman.seed")' > "$EVIDENCE_DIR/logs/backend-wheel-imports.command"
+printf '\n' >> "$EVIDENCE_DIR/logs/backend-wheel-imports.command"
 set +e
 DATABASE_URL='postgresql+psycopg://offline:offline@127.0.0.1:5432/offline' \
 OTP_PEPPER=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa SESSION_PEPPER=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
@@ -104,6 +188,9 @@ set -e
 echo "$rc" > "$EVIDENCE_DIR/logs/backend-wheel-imports.exit"
 (( rc == 0 )) || { cat "$EVIDENCE_DIR/logs/backend-wheel-imports.log" >&2; exit "$rc"; }
 
+printf '%q ' "$RUNTIME/bin/python" - "$LOCK_DIR/runtime.txt" "$EVIDENCE_DIR/inventories/runtime-with-backend-wheel.json" > "$EVIDENCE_DIR/logs/backend-wheel-inventory.command"
+printf '\n' >> "$EVIDENCE_DIR/logs/backend-wheel-inventory.command"
+set +e
 "$RUNTIME/bin/python" - "$LOCK_DIR/runtime.txt" "$EVIDENCE_DIR/inventories/runtime-with-backend-wheel.json" <<'PY'
 from importlib import metadata
 import json, re, sys
@@ -123,3 +210,7 @@ output.write_text(json.dumps(result,indent=2)+'\n')
 print(json.dumps(result,indent=2))
 raise SystemExit(0 if result['match'] else 1)
 PY
+rc=$?
+set -e
+printf '%s\n' "$rc" > "$EVIDENCE_DIR/logs/backend-wheel-inventory.exit"
+(( rc == 0 )) || exit "$rc"

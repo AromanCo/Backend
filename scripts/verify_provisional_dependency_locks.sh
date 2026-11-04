@@ -7,8 +7,16 @@ EVIDENCE_DIR="${AROMAN_EVIDENCE_DIR:?Set to a new evidence directory outside bot
 WHEELHOUSE_ROOT="${AROMAN_P5_WHEELHOUSE_ROOT:?Set to retained P5/R1 wheelhouse root}"
 PIP="${AROMAN_PIP:?Set to retained candidate pip 26.3 executable}"
 PYTHON="${AROMAN_PYTHON:?Set to Python 3.12.3 executable}"
+cd "$ROOT"
+EVIDENCE_DIR="$(python3 "$ROOT/scripts/provisional_safety.py" --evidence "$EVIDENCE_DIR" --wheelhouse "$WHEELHOUSE_ROOT")"
 mkdir -p "$EVIDENCE_DIR"/{venvs,logs,inventories,wheels,source}
-[[ "$EVIDENCE_DIR" != "$ROOT"/* && "$EVIDENCE_DIR" != *'/FrontEnd/'* ]] || { echo 'evidence must be outside both repositories' >&2; exit 2; }
+env | awk -F= '/^PIP_/ {print $1 "=<redacted>"}' | sort > "$EVIDENCE_DIR/logs/inherited-pip-settings.txt"
+while IFS= read -r name; do unset "$name"; done < <(export -p | sed -n 's/^declare -x \(PIP_[A-Za-z0-9_]*\)=.*/\1/p')
+export PIP_CONFIG_FILE=/dev/null PIP_NO_INDEX=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PYTHONDONTWRITEBYTECODE=1
+"$PYTHON" "$ROOT/scripts/verify_provisional_wheels.py" \
+  --manifest "$WHEELHOUSE_ROOT/wheel-hashes.csv" --wheelhouse-root "$WHEELHOUSE_ROOT" \
+  --locks "$LOCK_DIR" --output "$EVIDENCE_DIR/wheel-lock-verification.json" \
+  >"$EVIDENCE_DIR/logs/wheel-lock-verification.log" 2>&1
 "$PYTHON" --version | tee "$EVIDENCE_DIR/logs/python-version.txt"
 "$PIP" --version | tee "$EVIDENCE_DIR/logs/pip-version.txt"
 grep -F 'pip 26.3 ' "$EVIDENCE_DIR/logs/pip-version.txt" >/dev/null
@@ -51,5 +59,3 @@ print(json.dumps(result,indent=2))
 raise SystemExit(0 if result['match'] else 1)
 PY
  done
-
-"$PYTHON" "$ROOT/scripts/verify_provisional_wheels.py" --manifest "$WHEELHOUSE_ROOT/wheel-hashes.csv" --wheelhouse-root "$WHEELHOUSE_ROOT" --locks "$LOCK_DIR" --output "$EVIDENCE_DIR/wheel-lock-verification.json" >"$EVIDENCE_DIR/logs/wheel-lock-verification.log" 2>&1

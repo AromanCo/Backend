@@ -10,6 +10,11 @@ import json
 import re
 from pathlib import Path
 
+try:
+    from .provisional_safety import validate_evidence_path, validate_wheelhouse_path
+except ImportError:
+    from provisional_safety import validate_evidence_path, validate_wheelhouse_path
+
 
 def canonical(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
@@ -44,7 +49,19 @@ def main() -> int:
     parser.add_argument("--locks", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    rows = list(csv.DictReader(args.manifest.open()))
+    wheelhouse_root = validate_wheelhouse_path(args.wheelhouse_root)
+    manifest = args.manifest.resolve(strict=True)
+    if manifest.parent != wheelhouse_root:
+        raise ValueError("wheel manifest must be directly inside the retained wheelhouse root")
+    if not args.output.is_absolute() or any(
+        part in {".", ".."} for part in str(args.output).split("/")
+    ):
+        raise ValueError("output path must be absolute and contain no . or .. components")
+    output = args.output.resolve(strict=False)
+    validate_evidence_path(output.parent, must_not_exist=False)
+    if output.exists() or output.is_symlink():
+        raise ValueError("output already exists; use a fresh evidence directory")
+    rows = list(csv.DictReader(manifest.open()))
     report = {"provisional": True, "wheel_scopes": {}, "lock_scopes": {}, "problems": []}
     by_scope = {
         scope: [row for row in rows if row["scope"] == scope]
@@ -53,7 +70,16 @@ def main() -> int:
     for scope, scoped_rows in by_scope.items():
         checked, bad = 0, []
         for row in scoped_rows:
-            wheel = args.wheelhouse_root / f"wheelhouse-{scope}" / row["wheel"]
+            filename = Path(row["wheel"])
+            if filename.name != row["wheel"] or filename.is_absolute() or ".." in filename.parts:
+                bad.append({"wheel": row["wheel"], "problem": "unsafe manifest filename"})
+                continue
+            wheel = wheelhouse_root / f"wheelhouse-{scope}" / filename
+            if wheel.is_symlink() or not wheel.resolve(strict=False).is_relative_to(
+                (wheelhouse_root / f"wheelhouse-{scope}").resolve()
+            ):
+                bad.append({"wheel": row["wheel"], "problem": "wheel path escapes wheelhouse"})
+                continue
             if not wheel.is_file():
                 bad.append({"wheel": row["wheel"], "problem": "missing"})
                 continue
@@ -72,7 +98,7 @@ def main() -> int:
         actual = lock_map(args.locks / f"{scope}.txt")
         missing_or_bad = []
         for key, digest in expected.items():
-            if digest not in actual.get(key, set()):
+            if actual.get(key, set()) != {digest}:
                 missing_or_bad.append(
                     {
                         "package": key[0],
@@ -91,8 +117,7 @@ def main() -> int:
         }
         if not report["lock_scopes"][scope]["match"]:
             report["problems"].append(f"{scope}: candidate lock differs from retained manifest")
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2) + "\n")
+    output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
     return int(bool(report["problems"]))
 

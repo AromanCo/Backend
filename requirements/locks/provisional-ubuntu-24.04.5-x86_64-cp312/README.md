@@ -44,6 +44,24 @@ retained wheelhouse, `--no-index`, `--only-binary=:all:`, and
 results are captured externally. The wheel verifier compares every locked
 package/version/hash and retained wheel byte digest to the P5/R1 manifest.
 
+Run `scripts/test_provisional_backend_wheel.sh` with a new external evidence
+directory, setting `AROMAN_PIP` to candidate pip 26.3,
+`AROMAN_BOOTSTRAP_ENV` and `AROMAN_RUNTIME_ENV` to the offline-verified
+disposable environments, and `AROMAN_PYTHON` to candidate CPython 3.12.3. The
+script accepts no source revision override: it exports only the P8-authorized
+commit, derives `SOURCE_DATE_EPOCH` from that commit, captures the PEP 517
+hook, checks static and dynamic build closure, builds twice with
+`--no-isolation`, and compares wheel bytes and ZIP members. It then installs
+run 1 into the clean runtime with `--no-deps` and no index, checks the 28-entry
+runtime-plus-application inventory, imports the installed wheel, and runs
+`pip check`.
+
+All scripts validate absolute evidence paths before writes, reject repository
+overlap lexically and after symlink resolution, and require a fresh evidence
+directory. They redact inherited `PIP_*` values, remove those variables from
+pip processes, set `PIP_CONFIG_FILE` to the null device, disable indexes and
+caches, and verify retained wheel bytes before any install or generation.
+
 No default index, dependency resolution against a registry, uncontrolled build
 dependency, or global installation is allowed. A missing wheel, hash mismatch,
 target mismatch, or nonzero command is a hard failure. All generated locks and

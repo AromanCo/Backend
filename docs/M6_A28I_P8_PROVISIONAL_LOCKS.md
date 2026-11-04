@@ -46,18 +46,32 @@ retained wheelhouse. It compares the complete installed package/version
 inventory to the lock and runs `pip check`. Use a new external evidence
 directory for each run.
 
-`scripts/test_provisional_backend_wheel.sh` exports the authorized source
-revision into the external evidence directory, captures the PEP 517 hook,
-checks the static and dynamic build closure against the candidate build lock,
-builds a wheel with `--no-isolation` from the retained bootstrap closure,
-then installs it into the tested runtime with `--no-deps` and no index. It
-checks the 28-entry runtime-plus-application inventory, imports the installed
-wheel, and runs `pip check`.
+`scripts/test_provisional_backend_wheel.sh` accepts no source revision override. It
+exports only the P8-authorized source revision into the external evidence
+directory, records its tree and archive SHA-256 plus the `pyproject.toml`
+digest, derives `SOURCE_DATE_EPOCH` from the commit, captures the PEP 517
+hook, and checks static and dynamic build closure against the candidate build
+lock. It builds twice with `--no-isolation`, retains exact commands,
+environment and exit codes, compares wheel bytes and ZIP members, then
+installs run 1 into the tested runtime with `--no-deps` and no index. It checks
+the 28-entry runtime-plus-application inventory, imports the installed wheel,
+and runs `pip check`.
+
+All shell tools validate absolute evidence paths before writes, reject paths
+that overlap either repository lexically or after symlink resolution, and
+require a fresh evidence directory. They redact inherited `PIP_*` setting
+values, remove those variables from pip processes, set `PIP_CONFIG_FILE` to
+the null device, and disable indexes and caches. The wheel verifier checks
+every retained wheel before generation or install.
 
 P8 run logs, commands, exit codes, environment, inventories, wheel hashes, and
 reproducibility comparisons are retained outside the repositories at
 `/home/mrq/aroman-evidence/m6-a28i-p8/`. P5 and P5-R1 evidence remain in their
 original external directories and are not modified by this change.
+H1 remediation logs and the consolidated run report are retained at
+`/home/mrq/aroman-evidence/m6-a28i-p8-h1-report/`, with generation,
+installation, and build evidence in the sibling `m6-a28i-p8-h1-generation-final`,
+`m6-a28i-p8-h1-offline-verified`, and `m6-a28i-p8-h1-build-final2` directories.
 
 ## Experimental results
 
@@ -81,18 +95,16 @@ original external directories and are not modified by this change.
   requirements. Candidate build closure `setuptools==84.2.1` satisfies the
   static requirement. Candidate bootstrap closure contains `build==1.6.1`
   and `pyproject-hooks==1.3.3`; the wheel build used `--no-isolation`.
-- The Backend wheel installed offline with `--no-deps`. Its runtime inventory
-  matched exactly at 28/28, package imports resolved from the disposable
-  environment's `site-packages`, and `pip check` passed. The installed wheel
-  digest was `20548edd21c1967ba591bfaf7cd794bf073d72c450087bba10f0f302a7cdc8f8`.
-- Repeated no-isolation Backend wheel builds were **not byte-reproducible**:
-  run 2 hashed `20548edd21c1967ba591bfaf7cd794bf073d72c450087bba10f0f302a7cdc8f8`
-  and run 3 hashed `6745229f1f0a8b723dd1541751f1dcd9ad15d06fb7b084c895d6a7763d235463`.
-  ZIP member contents and entry names matched; five `.dist-info` entries had
-  different ZIP timestamps. Both wheels and the comparison evidence are kept
-  outside the repositories. Lock-file reproducibility does not imply
-  reproducible application wheel artifacts.
-- Local Backend tests completed: 204 passed, 6 skipped, with 1 deprecation
+- The P8 Backend wheel installed offline with `--no-deps`. Its runtime
+  inventory matched exactly at 28/28, package imports resolved from the
+  disposable environment's `site-packages`, and `pip check` passed.
+- Earlier builds without `SOURCE_DATE_EPOCH` differed only in ZIP timestamps
+  on five `.dist-info` members. The hardened build derives the epoch from the
+  authorized commit and produced byte-identical run 1/run 2 wheels with
+  SHA-256 `7fcb99592ed19628e9911b9b38a69d8520b1b2ddcca37bf76ea2cd8fb805ea80`.
+  This supports repeatability for this source, toolchain, and host; it does not
+  establish immutable builder identity or authoritative artifact provenance.
+- Local Backend tests completed: 219 passed, 6 skipped, with 1 deprecation
   warning. PostgreSQL/Docker gated suites were skipped because no disposable
   test service was provisioned.
 
