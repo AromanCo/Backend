@@ -15,7 +15,15 @@ from aroman.authentication.sms import UnconfiguredSMS, get_sms_provider
 from aroman.core.config import Settings, get_settings
 from aroman.core.db import get_db, get_engine, utcnow
 from aroman.main import app
-from aroman.models import AuthChallenge, AuthSession, Brand, FragranceNote, Product, User
+from aroman.models import (
+    AuthChallenge,
+    AuthSession,
+    Brand,
+    FragranceFamily,
+    FragranceNote,
+    Product,
+    User,
+)
 from aroman.seed import seed
 from tests.conftest import login
 
@@ -691,4 +699,34 @@ def test_seed_is_idempotent():
             db.scalar(select(func.count()).select_from(model))
             for model in (Brand, FragranceNote, Product)
         ]
-    assert counts_before == counts_after == [3, 24, 3]
+    assert counts_before == counts_after == [3, 24, 6]
+
+
+
+def test_synthetic_product_seed_covers_each_existing_family(client):
+    with Session(get_engine()) as db:
+        all_families = list(db.scalars(select(FragranceFamily)).all())
+        products = list(db.scalars(select(Product)).all())
+
+        assert len(all_families) == 6
+        assert len(products) == 6
+        assert {product.family_id for product in products} == {family.id for family in all_families}
+        assert len({product.slug for product in products}) == len(products)
+        assert all(product.is_demo for product in products)
+        assert {
+            "aroman-garden-demo",
+            "mehr-citrus-demo",
+            "nava-wood-demo",
+        }.issubset({product.slug for product in products})
+        for product in products:
+            assert product.brand.is_demo
+            assert len(product.variants) == 1
+            assert product.variants[0].is_demo
+            assert product.variants[0].sku == product.slug + "-sample"
+            assert product.variants[0].volume_ml is None
+
+    for family in all_families:
+        response = client.get("/api/v1/products", params={"family_id": str(family.id)})
+        assert response.status_code == 200
+        assert response.json()
+        assert all(row["family_id"] == str(family.id) and row["is_demo"] for row in response.json())
