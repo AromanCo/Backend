@@ -22,6 +22,7 @@ from aroman.models import (
     FragranceFamily,
     FragranceNote,
     Product,
+    ProductVariant,
     User,
 )
 from aroman.seed import seed
@@ -692,14 +693,14 @@ def test_seed_is_idempotent():
     with Session(get_engine()) as db:
         counts_before = [
             db.scalar(select(func.count()).select_from(model))
-            for model in (Brand, FragranceNote, Product)
+            for model in (Brand, FragranceNote, Product, ProductVariant)
         ]
         seed(db)
         counts_after = [
             db.scalar(select(func.count()).select_from(model))
             for model in (Brand, FragranceNote, Product)
         ]
-    assert counts_before == counts_after == [3, 24, 6]
+    assert counts_before == counts_after == [3, 24, 6, 6]
 
 
 
@@ -710,7 +711,8 @@ def test_synthetic_product_seed_covers_each_existing_family(client):
 
         assert len(all_families) == 6
         assert len(products) == 6
-        assert {product.family_id for product in products} == {family.id for family in all_families}
+        family_ids = {family.id for family in all_families}
+        assert {product.family_id for product in products} == family_ids
         assert len({product.slug for product in products}) == len(products)
         assert all(product.is_demo for product in products)
         assert {
@@ -725,8 +727,8 @@ def test_synthetic_product_seed_covers_each_existing_family(client):
             assert product.variants[0].sku == product.slug + "-sample"
             assert product.variants[0].volume_ml is None
 
-    for family in all_families:
-        response = client.get("/api/v1/products", params={"family_id": str(family.id)})
+    for family_id in family_ids:
+        response = client.get("/api/v1/products", params={"family_id": str(family_id)})
         assert response.status_code == 200
         assert response.json()
-        assert all(row["family_id"] == str(family.id) and row["is_demo"] for row in response.json())
+        assert all(row["family_id"] == str(family_id) and row["is_demo"] for row in response.json())
