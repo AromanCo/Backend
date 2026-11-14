@@ -49,6 +49,9 @@ PRODUCTS = [
     ("aroman-garden-demo", "باغ آرومان — نمونه", "aroman-demo", "floral"),
     ("mehr-citrus-demo", "صبح مهر — نمونه", "mehr-demo", "citrus"),
     ("nava-wood-demo", "چوب نوا — نمونه", "nava-demo", "woody"),
+    ("nava-amber-demo", "غروب نوا — نمونه", "nava-demo", "amber"),
+    ("mehr-fresh-demo", "نسیم مهر — نمونه", "mehr-demo", "fresh"),
+    ("nava-gourmand-demo", "کاکائوی نوا — نمونه", "nava-demo", "gourmand"),
 ]
 
 
