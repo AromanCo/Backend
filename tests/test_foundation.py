@@ -698,7 +698,7 @@ def test_seed_is_idempotent():
         seed(db)
         counts_after = [
             db.scalar(select(func.count()).select_from(model))
-            for model in (Brand, FragranceNote, Product)
+            for model in (Brand, FragranceNote, Product, ProductVariant)
         ]
     assert counts_before == counts_after == [3, 24, 6, 6]
 
