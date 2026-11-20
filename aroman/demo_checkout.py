@@ -67,7 +67,17 @@ class OrderRequest(QuoteRequest):
     expected_subtotal: Annotated[int, Field(strict=True, ge=1)]
 
 
-OrderStatus = Literal["placed", "paid", "cancelled"]
+OrderStatus = Literal["placed", "paid", "cancelled", "preparing", "shipped", "delivered"]
+OrderAction = Literal[
+    "simulate-payment", "cancel", "simulate-preparation", "simulate-shipping", "simulate-delivery"
+]
+ORDER_TRANSITIONS: dict[OrderAction, tuple[OrderStatus, OrderStatus]] = {
+    "simulate-payment": ("placed", "paid"),
+    "cancel": ("placed", "cancelled"),
+    "simulate-preparation": ("paid", "preparing"),
+    "simulate-shipping": ("preparing", "shipped"),
+    "simulate-delivery": ("shipped", "delivered"),
+}
 
 
 class OrderEvent(BaseModel):
@@ -202,12 +212,12 @@ def list_orders(
 @router.post("/orders/{order_id}/actions/{action}", response_model=OrderReceipt)
 def change_order_status(
     order_id: UUID,
-    action: Literal["simulate-payment", "cancel"],
+    action: OrderAction,
     request: Request,
     session: AuthSession = Depends(current_session),
 ) -> OrderReceipt:
     store: DemoOrders = request.app.state.demo_orders
-    target = "paid" if action == "simulate-payment" else "cancelled"
+    required_status, target = ORDER_TRANSITIONS[action]
     key = (str(session.user_id), str(order_id))
     with store.transaction() as orders:
         row = orders.execute(
@@ -216,10 +226,10 @@ def change_order_status(
         if row is None:
             raise HTTPException(404, "Demo order not found")
         receipt = OrderReceipt.model_validate_json(row[0])
-        if receipt.status == target:
+        if any(event.status == target for event in receipt.events):
             return receipt
-        if receipt.status != "placed":
-            raise HTTPException(409, "Demo order is no longer awaiting payment")
+        if receipt.status != required_status:
+            raise HTTPException(409, "Demo order is not ready for this action")
         changed = receipt.model_copy(update={
             "status": target,
             "events": [*receipt.events, OrderEvent(status=target, occurred_at=utcnow())],

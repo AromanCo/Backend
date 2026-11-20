@@ -151,10 +151,38 @@ def test_order_requires_session_and_csrf_and_replays_same_receipt(
         assert restarted.get(ORDERS).json() == [cancelled.json(), paid.json()]
         assert restarted.post(ORDERS, json=body, headers=headers).json() == paid.json()
 
+    actions_path = f"{ORDERS}/{created.json()['id']}/actions"
+    early_shipping = quote_client.post(f"{actions_path}/simulate-shipping", headers=headers)
+    assert early_shipping.status_code == 409
+    assert quote_client.post(
+        f"{second_path}/simulate-preparation", headers=headers
+    ).status_code == 409
+    for action, expected in [
+        ("simulate-preparation", "preparing"),
+        ("simulate-shipping", "shipped"),
+        ("simulate-delivery", "delivered"),
+    ]:
+        transition = quote_client.post(f"{actions_path}/{action}", headers=headers)
+        assert transition.status_code == 200
+        assert transition.json()["status"] == expected
+        assert transition.json()["events"][-1]["occurred_at"]
+        assert quote_client.post(f"{actions_path}/{action}", headers=headers).json() == (
+            transition.json()
+        )
+    delivered = transition.json()
+    assert [event["status"] for event in delivered["events"]] == [
+        "placed", "paid", "preparing", "shipped", "delivered"
+    ]
+    assert quote_client.post(paid_url, headers=headers).json() == delivered
+    assert quote_client.get(ORDERS).json() == [cancelled.json(), delivered]
+
     token = login(order_customer, sms, "09990000082")
     quote_client.cookies.update(order_customer.cookies)
     assert quote_client.get(ORDERS).json() == []
     assert quote_client.post(paid_url, headers={**origin, "X-CSRF-Token": token}).status_code == 404
+    assert quote_client.post(
+        f"{actions_path}/simulate-delivery", headers={**origin, "X-CSRF-Token": token}
+    ).status_code == 404
     other = quote_client.post(ORDERS, json=body, headers={**origin, "X-CSRF-Token": token})
     assert other.status_code == 201, other.text
     assert other.json()["id"] != created.json()["id"]
