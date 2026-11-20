@@ -67,7 +67,7 @@ class OrderRequest(QuoteRequest):
 class OrderReceipt(Quote):
     id: UUID
     created_at: datetime
-    status: Literal["placed"] = "placed"
+    status: Literal["placed", "paid", "cancelled"] = "placed"
 
 
 class DemoOrders:
@@ -153,3 +153,26 @@ def list_orders(
             for (owner_id, _), (_, receipt) in reversed(store.orders.items())
             if owner_id == session.user_id
         ]
+
+
+@router.post("/orders/{order_id}/actions/{action}", response_model=OrderReceipt)
+def change_order_status(
+    order_id: UUID,
+    action: Literal["simulate-payment", "cancel"],
+    request: Request,
+    session: AuthSession = Depends(current_session),
+) -> OrderReceipt:
+    store: DemoOrders = request.app.state.demo_orders
+    target = "paid" if action == "simulate-payment" else "cancelled"
+    with store.lock:
+        for key, (original, receipt) in store.orders.items():
+            if key[0] != session.user_id or receipt.id != order_id:
+                continue
+            if receipt.status == target:
+                return receipt
+            if receipt.status != "placed":
+                raise HTTPException(409, "Demo order is no longer awaiting payment")
+            changed = receipt.model_copy(update={"status": target})
+            store.orders[key] = (original, changed)
+            return changed
+    raise HTTPException(404, "Demo order not found")

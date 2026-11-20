@@ -109,10 +109,28 @@ def test_order_requires_session_and_csrf_and_replays_same_receipt(
     )
     assert second.status_code == 201
     assert quote_client.get(ORDERS).json() == [second.json(), created.json()]
+    paid_url = f"{ORDERS}/{created.json()['id']}/actions/simulate-payment"
+    cancel_url = f"{ORDERS}/{created.json()['id']}/actions/cancel"
+    assert quote_client.post(paid_url, headers=origin).status_code == 403
+    paid = quote_client.post(paid_url, headers=headers)
+    assert paid.status_code == 200
+    assert paid.json() == {**created.json(), "status": "paid"}
+    assert quote_client.post(paid_url, headers=headers).json() == paid.json()
+    assert quote_client.post(cancel_url, headers=headers).status_code == 409
+    assert quote_client.post(ORDERS, json=body, headers=headers).json() == paid.json()
+
+    second_path = f"{ORDERS}/{second.json()['id']}/actions"
+    cancelled = quote_client.post(f"{second_path}/cancel", headers=headers)
+    assert cancelled.status_code == 200
+    assert cancelled.json() == {**second.json(), "status": "cancelled"}
+    assert quote_client.post(f"{second_path}/cancel", headers=headers).json() == cancelled.json()
+    assert quote_client.post(f"{second_path}/simulate-payment", headers=headers).status_code == 409
+    assert quote_client.get(ORDERS).json() == [cancelled.json(), paid.json()]
 
     token = login(order_customer, sms, "09990000082")
     quote_client.cookies.update(order_customer.cookies)
     assert quote_client.get(ORDERS).json() == []
+    assert quote_client.post(paid_url, headers={**origin, "X-CSRF-Token": token}).status_code == 404
     other = quote_client.post(ORDERS, json=body, headers={**origin, "X-CSRF-Token": token})
     assert other.status_code == 201, other.text
     assert other.json()["id"] != created.json()["id"]
