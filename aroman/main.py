@@ -17,6 +17,7 @@ from aroman.catalog.api import router as catalog_router
 from aroman.core.config import get_settings
 from aroman.core.db import get_db
 from aroman.core.errors import CodedForbidden
+from aroman.demo_checkout import DemoOrders
 from aroman.demo_checkout import router as demo_checkout_router
 from aroman.fragrance_concepts.api import router as concepts_router
 from aroman.fragrance_notes.api import router as notes_router
@@ -89,6 +90,7 @@ app.include_router(catalog_router, prefix="/api/v1")
 app.include_router(notes_router, prefix="/api/v1")
 app.include_router(concepts_router, prefix="/api/v1")
 if settings.demo_checkout_enabled:
+    app.state.demo_orders = DemoOrders()
     app.include_router(demo_checkout_router, prefix="/api/v1")
 
 

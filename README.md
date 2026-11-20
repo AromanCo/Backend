@@ -35,9 +35,13 @@ An isolated test instance started with `ENVIRONMENT=test` and
 `DEMO_CHECKOUT_ENABLED=true` accepts `POST /api/v1/demo-checkout/quote`. Send
 `{"items":[{"variant_id":"<seeded variant UUID>","quantity":2}]}`. The server
 returns an integer-rial subtotal and per-item breakdown using fictional
-prices. The quote is read-only. Order creation, stock reservation, fees and
-payment are outside this endpoint. The default API and restricted showcase
-omit this route.
+prices. The quote is read-only. The same test instance accepts
+`POST /api/v1/demo-checkout/orders` with the items, the displayed
+`expected_subtotal`, and a client-generated UUID `attempt_id`. Sign in and
+send the usual origin and CSRF headers. Repeating the same request under the
+same customer returns the same receipt. Orders live in process memory and
+are erased at shutdown. Stock reservation, fees and payment are outside
+this demo. The default API and restricted showcase omit both routes.
 
 ## Migration and legacy notes
 

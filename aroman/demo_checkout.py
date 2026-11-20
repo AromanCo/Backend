@@ -1,15 +1,17 @@
-"""Price quotes for the fictional catalog in the test environment."""
+"""Cart quotes and temporary orders for the fictional test catalog."""
 
+from threading import Lock
 from typing import Annotated, Literal, Self
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from aroman.authentication.api import current_session
 from aroman.core.db import get_db
-from aroman.models import Product, ProductVariant
+from aroman.models import AuthSession, Product, ProductVariant
 
 router = APIRouter(prefix="/demo-checkout", tags=["demo checkout"])
 
@@ -56,6 +58,24 @@ class Quote(BaseModel):
     subtotal: int
 
 
+class OrderRequest(QuoteRequest):
+    attempt_id: UUID
+    expected_subtotal: Annotated[int, Field(strict=True, ge=1)]
+
+
+class OrderReceipt(Quote):
+    id: UUID
+    status: Literal["placed"] = "placed"
+
+
+class DemoOrders:
+    """One bounded order store for the lifetime of a test API process."""
+
+    def __init__(self) -> None:
+        self.lock = Lock()
+        self.orders: dict[tuple[UUID, UUID], tuple[OrderRequest, OrderReceipt]] = {}
+
+
 @router.post("/quote", response_model=Quote)
 def quote(body: QuoteRequest, db: Session = Depends(get_db)) -> Quote:
     rows = db.execute(
@@ -91,3 +111,30 @@ def quote(body: QuoteRequest, db: Session = Depends(get_db)) -> Quote:
             )
         )
     return Quote(items=items, subtotal=sum(item.line_total for item in items))
+
+
+@router.post("/orders", response_model=OrderReceipt, status_code=201)
+def submit_order(
+    body: OrderRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    session: AuthSession = Depends(current_session),
+) -> OrderReceipt:
+    store: DemoOrders = request.app.state.demo_orders
+    key = (session.user_id, body.attempt_id)
+    with store.lock:
+        previous = store.orders.get(key)
+        if previous is not None:
+            original, receipt = previous
+            if original != body:
+                raise HTTPException(409, "Order attempt already used for another cart")
+            return receipt
+
+        priced_cart = quote(body, db)
+        if priced_cart.subtotal != body.expected_subtotal:
+            raise HTTPException(409, "Demo quote changed")
+        if len(store.orders) >= 256:
+            raise HTTPException(503, "Demo order capacity reached")
+        receipt = OrderReceipt(id=uuid4(), **priced_cart.model_dump())
+        store.orders[key] = (body, receipt)
+        return receipt

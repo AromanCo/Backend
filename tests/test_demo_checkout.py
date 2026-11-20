@@ -6,18 +6,27 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from aroman.core.config import Settings
-from aroman.demo_checkout import router
+from aroman.demo_checkout import DemoOrders, router
 from aroman.exploration_api import app as showcase_app
+from tests.conftest import login
 
 PATH = "/api/v1/demo-checkout/quote"
+ORDERS = "/api/v1/demo-checkout/orders"
 
 
 @pytest.fixture
 def quote_client():
     app = FastAPI()
+    app.state.demo_orders = DemoOrders()
     app.include_router(router, prefix="/api/v1")
     with TestClient(app) as client:
         yield client
+
+
+@pytest.fixture
+def order_customer(client):
+    with TestClient(client.app, client=("198.51.100.28", 47000)) as customer:
+        yield customer
 
 
 def seeded_cart(client):
@@ -67,6 +76,37 @@ def test_does_not_accept_duplicate_items(client, quote_client):
 def test_default_api_and_showcase_omit_the_route(client):
     assert PATH not in client.get("/openapi.json").json()["paths"]
     assert PATH not in showcase_app.openapi()["paths"]
+    assert ORDERS not in client.get("/openapi.json").json()["paths"]
+    assert ORDERS not in showcase_app.openapi()["paths"]
+
+
+def test_order_requires_session_and_csrf_and_replays_same_receipt(
+    order_customer, quote_client, sms
+):
+    lines = seeded_cart(order_customer)
+    body = {"items": lines, "attempt_id": str(uuid4()), "expected_subtotal": 3_900_000}
+    origin = {"Origin": "http://localhost:3000"}
+    assert quote_client.post(ORDERS, json=body, headers=origin).status_code == 401
+
+    token = login(order_customer, sms, "09990000081")
+    quote_client.cookies.update(order_customer.cookies)
+    assert quote_client.post(ORDERS, json=body, headers=origin).status_code == 403
+    headers = {**origin, "X-CSRF-Token": token}
+    stale = {**body, "expected_subtotal": 1}
+    assert quote_client.post(ORDERS, json=stale, headers=headers).status_code == 409
+
+    created = quote_client.post(ORDERS, json=body, headers=headers)
+    assert created.status_code == 201, created.text
+    assert created.json()["status"] == "placed"
+    assert created.json()["subtotal"] == 3_900_000
+    assert quote_client.post(ORDERS, json=body, headers=headers).json() == created.json()
+    assert quote_client.post(ORDERS, json=stale, headers=headers).status_code == 409
+
+    token = login(order_customer, sms, "09990000082")
+    quote_client.cookies.update(order_customer.cookies)
+    other = quote_client.post(ORDERS, json=body, headers={**origin, "X-CSRF-Token": token})
+    assert other.status_code == 201, other.text
+    assert other.json()["id"] != created.json()["id"]
 
 
 @pytest.mark.parametrize("environment", ["development", "staging", "production"])
