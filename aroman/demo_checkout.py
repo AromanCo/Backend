@@ -67,10 +67,27 @@ class OrderRequest(QuoteRequest):
     expected_subtotal: Annotated[int, Field(strict=True, ge=1)]
 
 
+OrderStatus = Literal["placed", "paid", "cancelled"]
+
+
+class OrderEvent(BaseModel):
+    status: OrderStatus
+    occurred_at: datetime | None
+
+
 class OrderReceipt(Quote):
     id: UUID
     created_at: datetime
-    status: Literal["placed", "paid", "cancelled"] = "placed"
+    status: OrderStatus = "placed"
+    events: list[OrderEvent] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def fill_legacy_events(self) -> Self:
+        if not self.events:
+            self.events = [OrderEvent(status="placed", occurred_at=self.created_at)]
+            if self.status != "placed":
+                self.events.append(OrderEvent(status=self.status, occurred_at=None))
+        return self
 
 
 class DemoOrders:
@@ -203,7 +220,10 @@ def change_order_status(
             return receipt
         if receipt.status != "placed":
             raise HTTPException(409, "Demo order is no longer awaiting payment")
-        changed = receipt.model_copy(update={"status": target})
+        changed = receipt.model_copy(update={
+            "status": target,
+            "events": [*receipt.events, OrderEvent(status=target, occurred_at=utcnow())],
+        })
         orders.execute(
             "UPDATE demo_orders SET receipt = ? WHERE owner_id = ? AND order_id = ?",
             (changed.model_dump_json(), *key),

@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from aroman.core.config import Settings
-from aroman.demo_checkout import DemoOrders, router
+from aroman.demo_checkout import DemoOrders, OrderReceipt, router
 from aroman.exploration_api import app as showcase_app
 from tests.conftest import login
 
@@ -101,6 +101,9 @@ def test_order_requires_session_and_csrf_and_replays_same_receipt(
     assert created.status_code == 201, created.text
     assert created.json()["status"] == "placed"
     assert created.json()["subtotal"] == 3_900_000
+    assert created.json()["events"] == [
+        {"status": "placed", "occurred_at": created.json()["created_at"]}
+    ]
     assert quote_client.post(ORDERS, json=body, headers=headers).json() == created.json()
     assert quote_client.post(ORDERS, json=stale, headers=headers).status_code == 409
     assert quote_client.get(ORDERS).json() == [created.json()]
@@ -114,7 +117,11 @@ def test_order_requires_session_and_csrf_and_replays_same_receipt(
     assert quote_client.post(paid_url, headers=origin).status_code == 403
     paid = quote_client.post(paid_url, headers=headers)
     assert paid.status_code == 200
-    assert paid.json() == {**created.json(), "status": "paid"}
+    paid_event = paid.json()["events"][-1]
+    assert paid_event["status"] == "paid" and paid_event["occurred_at"]
+    assert paid.json() == {
+        **created.json(), "status": "paid", "events": [*created.json()["events"], paid_event]
+    }
     assert quote_client.post(paid_url, headers=headers).json() == paid.json()
     assert quote_client.post(cancel_url, headers=headers).status_code == 409
     assert quote_client.post(ORDERS, json=body, headers=headers).json() == paid.json()
@@ -122,10 +129,21 @@ def test_order_requires_session_and_csrf_and_replays_same_receipt(
     second_path = f"{ORDERS}/{second.json()['id']}/actions"
     cancelled = quote_client.post(f"{second_path}/cancel", headers=headers)
     assert cancelled.status_code == 200
-    assert cancelled.json() == {**second.json(), "status": "cancelled"}
+    cancel_event = cancelled.json()["events"][-1]
+    assert cancel_event["status"] == "cancelled" and cancel_event["occurred_at"]
+    assert cancelled.json() == {
+        **second.json(), "status": "cancelled", "events": [*second.json()["events"], cancel_event]
+    }
     assert quote_client.post(f"{second_path}/cancel", headers=headers).json() == cancelled.json()
     assert quote_client.post(f"{second_path}/simulate-payment", headers=headers).status_code == 409
     assert quote_client.get(ORDERS).json() == [cancelled.json(), paid.json()]
+    for final in [cancelled.json(), paid.json()]:
+        previous_format = {key: value for key, value in final.items() if key != "events"}
+        events = OrderReceipt.model_validate(previous_format).model_dump(mode="json")["events"]
+        assert events == [
+            {"status": "placed", "occurred_at": final["created_at"]},
+            {"status": final["status"], "occurred_at": None},
+        ]
     reopened = FastAPI()
     reopened.state.demo_orders = DemoOrders(quote_client.app.state.demo_orders.path)
     reopened.include_router(router, prefix="/api/v1")
