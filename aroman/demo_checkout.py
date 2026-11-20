@@ -1,5 +1,6 @@
 """Cart quotes and temporary orders for the fictional test catalog."""
 
+from datetime import datetime
 from threading import Lock
 from typing import Annotated, Literal, Self
 from uuid import UUID, uuid4
@@ -10,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from aroman.authentication.api import current_session
-from aroman.core.db import get_db
+from aroman.core.db import get_db, utcnow
 from aroman.models import AuthSession, Product, ProductVariant
 
 router = APIRouter(prefix="/demo-checkout", tags=["demo checkout"])
@@ -65,6 +66,7 @@ class OrderRequest(QuoteRequest):
 
 class OrderReceipt(Quote):
     id: UUID
+    created_at: datetime
     status: Literal["placed"] = "placed"
 
 
@@ -135,6 +137,19 @@ def submit_order(
             raise HTTPException(409, "Demo quote changed")
         if len(store.orders) >= 256:
             raise HTTPException(503, "Demo order capacity reached")
-        receipt = OrderReceipt(id=uuid4(), **priced_cart.model_dump())
+        receipt = OrderReceipt(id=uuid4(), created_at=utcnow(), **priced_cart.model_dump())
         store.orders[key] = (body, receipt)
         return receipt
+
+
+@router.get("/orders", response_model=list[OrderReceipt])
+def list_orders(
+    request: Request, session: AuthSession = Depends(current_session)
+) -> list[OrderReceipt]:
+    store: DemoOrders = request.app.state.demo_orders
+    with store.lock:
+        return [
+            receipt
+            for (owner_id, _), (_, receipt) in reversed(store.orders.items())
+            if owner_id == session.user_id
+        ]

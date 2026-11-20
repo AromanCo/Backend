@@ -87,9 +87,11 @@ def test_order_requires_session_and_csrf_and_replays_same_receipt(
     body = {"items": lines, "attempt_id": str(uuid4()), "expected_subtotal": 3_900_000}
     origin = {"Origin": "http://localhost:3000"}
     assert quote_client.post(ORDERS, json=body, headers=origin).status_code == 401
+    assert quote_client.get(ORDERS).status_code == 401
 
     token = login(order_customer, sms, "09990000081")
     quote_client.cookies.update(order_customer.cookies)
+    assert quote_client.get(ORDERS).json() == []
     assert quote_client.post(ORDERS, json=body, headers=origin).status_code == 403
     headers = {**origin, "X-CSRF-Token": token}
     stale = {**body, "expected_subtotal": 1}
@@ -101,12 +103,20 @@ def test_order_requires_session_and_csrf_and_replays_same_receipt(
     assert created.json()["subtotal"] == 3_900_000
     assert quote_client.post(ORDERS, json=body, headers=headers).json() == created.json()
     assert quote_client.post(ORDERS, json=stale, headers=headers).status_code == 409
+    assert quote_client.get(ORDERS).json() == [created.json()]
+    second = quote_client.post(
+        ORDERS, json={**body, "attempt_id": str(uuid4())}, headers=headers
+    )
+    assert second.status_code == 201
+    assert quote_client.get(ORDERS).json() == [second.json(), created.json()]
 
     token = login(order_customer, sms, "09990000082")
     quote_client.cookies.update(order_customer.cookies)
+    assert quote_client.get(ORDERS).json() == []
     other = quote_client.post(ORDERS, json=body, headers={**origin, "X-CSRF-Token": token})
     assert other.status_code == 201, other.text
     assert other.json()["id"] != created.json()["id"]
+    assert quote_client.get(ORDERS).json() == [other.json()]
 
 
 @pytest.mark.parametrize("environment", ["development", "staging", "production"])
