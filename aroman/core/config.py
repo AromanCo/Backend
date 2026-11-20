@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     session_pepper: str = Field(default="", repr=False)
     sms_provider: Literal["unconfigured", "fake"] = "unconfigured"
     fake_sms_enabled: bool = False
+    demo_checkout_enabled: bool = False
     cors_origins: str = "http://localhost:3000"
     trusted_proxy_cidrs: str = ""
     cookie_secure: bool = True
@@ -46,6 +47,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def secure_configuration(self) -> "Settings":
+        if self.demo_checkout_enabled and self.environment != "test":
+            raise ValueError("Demo checkout is available only in the test environment")
         if not self.database_url:
             raise ValueError("DATABASE_URL is required")
         if len(self.otp_pepper) < 32 or len(self.session_pepper) < 32:

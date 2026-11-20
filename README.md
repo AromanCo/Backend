@@ -27,7 +27,17 @@ The frontend contract is in [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) and [
 
 `POST /api/v1/fragrance-concepts` with `{"name":"باغ من","notes":[{"note_id":"<uuid>","layer":"top","position":0}]}`. `GET`, `PUT`, `DELETE` on `/api/v1/fragrance-concepts/<uuid>`; `POST /api/v1/fragrance-concepts/<uuid>/duplicate`. The six note cap is a configurable UX rule only. Concepts are not safe, validated, or manufacturable formulas.
 
-Seed data contains six conceptual families, 24 conceptual notes, three fictional/demo brands and products, and no prices, inventory, reviews, longevity metrics, or manufacturer claims. The seed command is idempotent by slug.
+Seed data contains six conceptual families, 24 conceptual notes, three fictional demo brands and six fictional products. The catalog seed is idempotent by slug.
+
+### Demo cart quote
+
+An isolated test instance started with `ENVIRONMENT=test` and
+`DEMO_CHECKOUT_ENABLED=true` accepts `POST /api/v1/demo-checkout/quote`. Send
+`{"items":[{"variant_id":"<seeded variant UUID>","quantity":2}]}`. The server
+returns an integer-rial subtotal and per-item breakdown using fictional
+prices. The quote is read-only. Order creation, stock reservation, fees and
+payment are outside this endpoint. The default API and restricted showcase
+omit this route.
 
 ## Migration and legacy notes
 
