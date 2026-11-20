@@ -1,7 +1,10 @@
 """Cart quotes and temporary orders for the fictional test catalog."""
 
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from datetime import datetime
-from threading import Lock
+from pathlib import Path
+from sqlite3 import Connection, connect
 from typing import Annotated, Literal, Self
 from uuid import UUID, uuid4
 
@@ -71,11 +74,29 @@ class OrderReceipt(Quote):
 
 
 class DemoOrders:
-    """One bounded order store for the lifetime of a test API process."""
+    """A SQLite sidecar for the isolated demo, separate from the catalog schema."""
 
-    def __init__(self) -> None:
-        self.lock = Lock()
-        self.orders: dict[tuple[UUID, UUID], tuple[OrderRequest, OrderReceipt]] = {}
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        with self.transaction() as db:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS demo_orders (
+                    sequence INTEGER PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
+                    attempt_id TEXT NOT NULL,
+                    order_id TEXT NOT NULL UNIQUE,
+                    original TEXT NOT NULL,
+                    receipt TEXT NOT NULL,
+                    UNIQUE (owner_id, attempt_id)
+                )
+            """)
+
+    @contextmanager
+    def transaction(self, *, write: bool = True) -> Iterator[Connection]:
+        with closing(connect(self.path)) as db, db:
+            if write:
+                db.execute("BEGIN IMMEDIATE")
+            yield db
 
 
 @router.post("/quote", response_model=Quote)
@@ -123,22 +144,28 @@ def submit_order(
     session: AuthSession = Depends(current_session),
 ) -> OrderReceipt:
     store: DemoOrders = request.app.state.demo_orders
-    key = (session.user_id, body.attempt_id)
-    with store.lock:
-        previous = store.orders.get(key)
+    key = (str(session.user_id), str(body.attempt_id))
+    with store.transaction() as orders:
+        previous = orders.execute(
+            "SELECT original, receipt FROM demo_orders WHERE owner_id = ? AND attempt_id = ?", key
+        ).fetchone()
         if previous is not None:
             original, receipt = previous
-            if original != body:
+            if OrderRequest.model_validate_json(original) != body:
                 raise HTTPException(409, "Order attempt already used for another cart")
-            return receipt
+            return OrderReceipt.model_validate_json(receipt)
 
         priced_cart = quote(body, db)
         if priced_cart.subtotal != body.expected_subtotal:
             raise HTTPException(409, "Demo quote changed")
-        if len(store.orders) >= 256:
+        if orders.execute("SELECT COUNT(*) FROM demo_orders").fetchone()[0] >= 256:
             raise HTTPException(503, "Demo order capacity reached")
         receipt = OrderReceipt(id=uuid4(), created_at=utcnow(), **priced_cart.model_dump())
-        store.orders[key] = (body, receipt)
+        orders.execute(
+            "INSERT INTO demo_orders (owner_id, attempt_id, order_id, original, receipt) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (*key, str(receipt.id), body.model_dump_json(), receipt.model_dump_json()),
+        )
         return receipt
 
 
@@ -147,12 +174,12 @@ def list_orders(
     request: Request, session: AuthSession = Depends(current_session)
 ) -> list[OrderReceipt]:
     store: DemoOrders = request.app.state.demo_orders
-    with store.lock:
-        return [
-            receipt
-            for (owner_id, _), (_, receipt) in reversed(store.orders.items())
-            if owner_id == session.user_id
-        ]
+    with store.transaction(write=False) as orders:
+        rows = orders.execute(
+            "SELECT receipt FROM demo_orders WHERE owner_id = ? ORDER BY sequence DESC",
+            (str(session.user_id),),
+        )
+        return [OrderReceipt.model_validate_json(receipt) for (receipt,) in rows]
 
 
 @router.post("/orders/{order_id}/actions/{action}", response_model=OrderReceipt)
@@ -164,15 +191,21 @@ def change_order_status(
 ) -> OrderReceipt:
     store: DemoOrders = request.app.state.demo_orders
     target = "paid" if action == "simulate-payment" else "cancelled"
-    with store.lock:
-        for key, (original, receipt) in store.orders.items():
-            if key[0] != session.user_id or receipt.id != order_id:
-                continue
-            if receipt.status == target:
-                return receipt
-            if receipt.status != "placed":
-                raise HTTPException(409, "Demo order is no longer awaiting payment")
-            changed = receipt.model_copy(update={"status": target})
-            store.orders[key] = (original, changed)
-            return changed
-    raise HTTPException(404, "Demo order not found")
+    key = (str(session.user_id), str(order_id))
+    with store.transaction() as orders:
+        row = orders.execute(
+            "SELECT receipt FROM demo_orders WHERE owner_id = ? AND order_id = ?", key
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "Demo order not found")
+        receipt = OrderReceipt.model_validate_json(row[0])
+        if receipt.status == target:
+            return receipt
+        if receipt.status != "placed":
+            raise HTTPException(409, "Demo order is no longer awaiting payment")
+        changed = receipt.model_copy(update={"status": target})
+        orders.execute(
+            "UPDATE demo_orders SET receipt = ? WHERE owner_id = ? AND order_id = ?",
+            (changed.model_dump_json(), *key),
+        )
+        return changed

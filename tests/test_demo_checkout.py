@@ -15,9 +15,9 @@ ORDERS = "/api/v1/demo-checkout/orders"
 
 
 @pytest.fixture
-def quote_client():
+def quote_client(tmp_path):
     app = FastAPI()
-    app.state.demo_orders = DemoOrders()
+    app.state.demo_orders = DemoOrders(tmp_path / "demo.orders")
     app.include_router(router, prefix="/api/v1")
     with TestClient(app) as client:
         yield client
@@ -126,6 +126,12 @@ def test_order_requires_session_and_csrf_and_replays_same_receipt(
     assert quote_client.post(f"{second_path}/cancel", headers=headers).json() == cancelled.json()
     assert quote_client.post(f"{second_path}/simulate-payment", headers=headers).status_code == 409
     assert quote_client.get(ORDERS).json() == [cancelled.json(), paid.json()]
+    reopened = FastAPI()
+    reopened.state.demo_orders = DemoOrders(quote_client.app.state.demo_orders.path)
+    reopened.include_router(router, prefix="/api/v1")
+    with TestClient(reopened, cookies=quote_client.cookies) as restarted:
+        assert restarted.get(ORDERS).json() == [cancelled.json(), paid.json()]
+        assert restarted.post(ORDERS, json=body, headers=headers).json() == paid.json()
 
     token = login(order_customer, sms, "09990000082")
     quote_client.cookies.update(order_customer.cookies)

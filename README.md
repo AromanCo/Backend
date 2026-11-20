@@ -39,9 +39,12 @@ prices. The quote is read-only. The same test instance accepts
 `POST /api/v1/demo-checkout/orders` with the items, the displayed
 `expected_subtotal`, and a client-generated UUID `attempt_id`. Sign in and
 send the usual origin and CSRF headers. Repeating the same request under the
-same customer returns the same receipt. Orders live in process memory and
-are erased at shutdown. Stock reservation, fees and payment are outside
-this demo. The default API and restricted showcase omit both routes.
+same customer returns the same receipt. The test checkout requires a file-backed
+SQLite catalog database and stores orders in a sibling `.orders` SQLite file.
+Reusing those files preserves receipts and order status across API restarts.
+The local preview deletes its temporary directory at shutdown. Stock
+reservation, fees and real payment are outside this demo. The default API
+and restricted showcase omit the demo checkout routes.
 
 ## Migration and legacy notes
 

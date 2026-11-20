@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
@@ -8,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -90,7 +92,16 @@ app.include_router(catalog_router, prefix="/api/v1")
 app.include_router(notes_router, prefix="/api/v1")
 app.include_router(concepts_router, prefix="/api/v1")
 if settings.demo_checkout_enabled:
-    app.state.demo_orders = DemoOrders()
+    catalog_db = make_url(settings.database_url)
+    if (
+        catalog_db.get_backend_name() != "sqlite"
+        or not catalog_db.database
+        or catalog_db.database == ":memory:"
+        or catalog_db.database.startswith("file:")
+        or catalog_db.query
+    ):
+        raise ValueError("Demo checkout requires a file-backed SQLite database")
+    app.state.demo_orders = DemoOrders(Path(f"{catalog_db.database}.orders"))
     app.include_router(demo_checkout_router, prefix="/api/v1")
 
 
