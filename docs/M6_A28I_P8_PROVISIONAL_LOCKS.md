@@ -163,3 +163,29 @@ review, and reviewer disposition. The F9 catalog API Dockerfile still resolves
 dependency ranges and an image built through that path would not establish
 reproducibility from this lock and wheelhouse. Stage B acceptance and target
 validation remain pending.
+
+### Candidate Linux/amd64 platform
+
+The candidate parent for both environments is the [Docker Official Ubuntu image](https://hub.docker.com/_/ubuntu)
+at the platform manifest digest
+`docker.io/library/ubuntu@sha256:9a04f13b3f80ef056361e30868593b1cfd2279fe19e4081cb93a90bf56819d6a`.
+The manifest, config and root filesystem layer bytes matched their descriptor
+digests. The root filesystem identifies itself as Ubuntu 24.04.5 LTS, has
+`libc6 2.39-0ubuntu8.9`, and contains no Python 3 package. This records a
+candidate parent. Derived builder and runtime image digests are still pending.
+
+The [Ubuntu archive snapshot](https://snapshot.ubuntu.com/) at
+`20261121T120000Z` was checked using the Ubuntu archive keyring in that
+digest-pinned parent. All three `InRelease` signatures and their signed
+amd64 main package-index hashes verified. Both updated and security indexes
+listed `python3.12` at `3.12.3-1ubuntu0.17` with package SHA-256
+`6745c9463432e619d7402b117ad4ac86c31dcd3999ba20daa9e395f6f9909d86`.
+They also listed the matching minimal and standard-library packages and
+`libc6 2.39-0ubuntu8.12`.
+
+The proposed derived images should take their OS package closure from this
+snapshot. Before accepting them, record the full package inventory and
+resulting digests and verify the Python version, SOABI and glibc in the actual
+images. The next verification needs the retained `baseline-p5` manifest and
+its four wheel directories for the offline install. The registry and snapshot
+checks did not resolve or install the closure or run an image.
