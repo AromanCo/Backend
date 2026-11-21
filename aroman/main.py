@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
@@ -8,6 +9,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -17,6 +19,8 @@ from aroman.catalog.api import router as catalog_router
 from aroman.core.config import get_settings
 from aroman.core.db import get_db
 from aroman.core.errors import CodedForbidden
+from aroman.demo_checkout import DemoOrders
+from aroman.demo_checkout import router as demo_checkout_router
 from aroman.fragrance_concepts.api import router as concepts_router
 from aroman.fragrance_notes.api import router as notes_router
 from aroman.users.api import router as users_router
@@ -74,7 +78,9 @@ async def auth_validation_error_handler(request: Request, error: RequestValidati
 @app.middleware("http")
 async def private_no_store(request: Request, call_next):
     response = await call_next(request)
-    if request.url.path.startswith(("/api/v1/auth", "/api/v1/users", "/api/v1/fragrance-concepts")):
+    if request.url.path.startswith(
+        ("/api/v1/auth", "/api/v1/users", "/api/v1/fragrance-concepts", "/api/v1/demo-checkout")
+    ):
         response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -85,6 +91,18 @@ app.include_router(brands_router, prefix="/api/v1")
 app.include_router(catalog_router, prefix="/api/v1")
 app.include_router(notes_router, prefix="/api/v1")
 app.include_router(concepts_router, prefix="/api/v1")
+if settings.demo_checkout_enabled:
+    catalog_db = make_url(settings.database_url)
+    if (
+        catalog_db.get_backend_name() != "sqlite"
+        or not catalog_db.database
+        or catalog_db.database == ":memory:"
+        or catalog_db.database.startswith("file:")
+        or catalog_db.query
+    ):
+        raise ValueError("Demo checkout requires a file-backed SQLite database")
+    app.state.demo_orders = DemoOrders(Path(f"{catalog_db.database}.orders"))
+    app.include_router(demo_checkout_router, prefix="/api/v1")
 
 
 @app.get("/health/live", tags=["health"])

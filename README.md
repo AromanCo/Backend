@@ -27,7 +27,24 @@ The frontend contract is in [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md) and [
 
 `POST /api/v1/fragrance-concepts` with `{"name":"باغ من","notes":[{"note_id":"<uuid>","layer":"top","position":0}]}`. `GET`, `PUT`, `DELETE` on `/api/v1/fragrance-concepts/<uuid>`; `POST /api/v1/fragrance-concepts/<uuid>/duplicate`. The six note cap is a configurable UX rule only. Concepts are not safe, validated, or manufacturable formulas.
 
-Seed data contains six conceptual families, 24 conceptual notes, three fictional/demo brands and products, and no prices, inventory, reviews, longevity metrics, or manufacturer claims. The seed command is idempotent by slug.
+Seed data contains six conceptual families, 24 conceptual notes, three fictional demo brands and six fictional products. The catalog seed is idempotent by slug.
+
+### Demo cart quote
+
+An isolated test instance started with `ENVIRONMENT=test` and
+`DEMO_CHECKOUT_ENABLED=true` accepts `POST /api/v1/demo-checkout/quote`. Send
+`{"items":[{"variant_id":"<seeded variant UUID>","quantity":2}]}`. The server
+returns an integer-rial subtotal and per-item breakdown using fictional
+prices. The quote is read-only. The same test instance accepts
+`POST /api/v1/demo-checkout/orders` with the items, the displayed
+`expected_subtotal`, and a client-generated UUID `attempt_id`. Sign in and
+send the usual origin and CSRF headers. Repeating the same request under the
+same customer returns the same receipt. The test checkout requires a file-backed
+SQLite catalog database and stores orders in a sibling `.orders` SQLite file.
+Reusing those files preserves receipts and order status across API restarts.
+The local preview deletes its temporary directory at shutdown. Stock
+reservation, fees and real payment are outside this demo. The default API
+and restricted showcase omit the demo checkout routes.
 
 ## Migration and legacy notes
 
