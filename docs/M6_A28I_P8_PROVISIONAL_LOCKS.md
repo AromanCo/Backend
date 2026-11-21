@@ -120,3 +120,46 @@ trusted upstream provenance. The P5/R1 evidence explicitly records no
 vulnerability or license scan. Candidate locks must not be adopted by CI,
 Docker, release, or production until the separate Stage B requirements are
 completed.
+
+## F9 Stage B evidence inventory — 2026-11-21
+
+This review covers the lock files at `a4b73e0d78932ca0f3037751e4bc6af862bdf6cf`
+and the F9 restricted catalog source pin
+`0be24c4597bd693e70348243c26e550a20a8ad0e`. It used public registry
+metadata. The retained wheelhouse was unavailable in the review workspace.
+
+| Scope | Locked entries | Matches to published PyPI wheel SHA-256 | Yanked matches |
+| --- | ---: | ---: | ---: |
+| Runtime | 27 | 27 | 0 |
+| Static build | 1 | 1 | 0 |
+| Bootstrap | 8 | 8 | 0 |
+| Development | 40 | 40 | 0 |
+
+- The [OSV batch API](https://google.github.io/osv.dev/post-v1-querybatch/)
+  returned no advisories for the 46 distinct PyPI package/version pairs
+  across these scopes and supplied no further page tokens. This point-in-time
+  check covers Python lock pins. The base OS and bundled native libraries
+  still need their own review against the selected build and runtime images.
+- For the exact runtime wheels, the [PyPI Integrity API](https://docs.pypi.org/api/integrity/)
+  returned nonempty attestation bundles for 15 of 27 wheels. The endpoint
+  returned HTTP 404 for the other 12: alembic, annotated-doc,
+  annotated-types, fastapi, h11, mako, opentelemetry-api, psycopg,
+  psycopg-binary, pydantic-core, pyyaml, and watchfiles.
+  Cryptographic verification of the 15 returned bundles and an approved
+  alternate provenance record for the others are pending.
+- PyPI runtime release JSON reported 22 SPDX expressions and four
+  classifier-only entries. The [python-dotenv 1.2.4 file metadata page](https://pypi.org/project/python-dotenv/1.2.4/)
+  supplies BSD-3-Clause for the remaining entry. PyPI reports LGPL-3.0-only
+  for psycopg and psycopg-binary 3.3.8. The image review should verify
+  distribution notices and bundled library licenses from the retained wheels.
+
+To advance the restricted Backend image, identify the immutable Linux/amd64
+builder and runtime images and verify their Python ABI, libc, and wheel tag
+compatibility with the retained P5/R1 wheelhouse. Run the existing
+`scripts/verify_provisional_wheels.py` against the retained
+`baseline-p5/wheel-hashes.csv` and its wheel files. Record separately the
+builder identity, verified wheel provenance, native-package audit, license
+review, and reviewer disposition. The F9 catalog API Dockerfile still resolves
+dependency ranges and an image built through that path would not establish
+reproducibility from this lock and wheelhouse. Stage B acceptance and target
+validation remain pending.
