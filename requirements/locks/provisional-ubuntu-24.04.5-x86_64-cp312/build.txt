@@ -1,0 +1,11 @@
+# PROVISIONAL — NOT APPROVED
+# Candidate lock generated from retained P5/R1 wheels only.
+# Target: Ubuntu 24.04.5 x86_64, CPython 3.12.3.
+
+--only-binary :all:
+
+
+# The following packages are considered to be unsafe in a requirements file:
+setuptools==84.2.1 \
+    --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2
+    # via -r requirements/lock-inputs/build.in
